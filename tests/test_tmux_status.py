@@ -6,7 +6,6 @@ from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
 
-
 MODULE_PATH = Path(__file__).resolve().parents[1] / "tmux_status.py"
 SPEC = importlib.util.spec_from_file_location("tmux_status", MODULE_PATH)
 tmux_status = importlib.util.module_from_spec(SPEC)

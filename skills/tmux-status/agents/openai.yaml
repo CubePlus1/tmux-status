@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tmux Status"
+  short_description: "Inspect tmux pane resources and agent activity"
+  default_prompt: "Use $tmux-status to inspect current tmux panes and flag resource or activity anomalies."
