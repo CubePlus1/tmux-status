@@ -53,6 +53,10 @@ No tmux server is a normal state and produces `No tmux server or panes found.`
 Manual marks are stored at `~/.config/tmux-status/marks.json`. Set
 `TMUX_STATUS_MARKS_FILE` to use another path.
 
+The JSON output uses the additive, versioned
+[JSON contract v2](docs/json-contract-v2.md). It includes stable tmux
+session/window identity fields and does not include pane content.
+
 ## Interpretation
 
 CPU and memory include the pane's root process and every descendant. CPU can

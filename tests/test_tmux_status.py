@@ -31,6 +31,11 @@ class TmuxStatusTests(unittest.TestCase):
                     "0",
                     "",
                     "/tmp/project",
+                    "$1",
+                    "1785231200",
+                    "@2",
+                    "4321",
+                    "1785231100",
                 ]
             )
             + "\n"
@@ -39,6 +44,11 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual(1, len(panes))
         self.assertEqual("work:0.1", panes[0].locator)
         self.assertEqual("%3", panes[0].pane_id)
+        self.assertEqual("$1", panes[0].session_id)
+        self.assertEqual(1785231200, panes[0].session_created)
+        self.assertEqual("@2", panes[0].window_id)
+        self.assertEqual(4321, panes[0].server_pid)
+        self.assertEqual(1785231100, panes[0].server_started)
 
     def test_parse_ps_and_descendants(self):
         output = """\
@@ -81,6 +91,53 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual(["CPU"], statuses[0].anomalies)
         self.assertEqual(["codex"], statuses[0].tools)
         self.assertEqual("active", statuses[0].activity)
+
+    def test_json_contract_v2_is_versioned_and_additive(self):
+        args = type("Args", (), {"cpu_threshold": 80.0, "memory_threshold": 1024.0})
+        payload = tmux_status.status_payload([], args)
+        self.assertEqual(2, payload["schema_version"])
+        self.assertEqual("0.2.0", payload["tool_version"])
+        self.assertIsNone(payload["server_instance_id"])
+        self.assertEqual(
+            {"name": "tmux-status", "version": "0.2.0"},
+            payload["producer"],
+        )
+        self.assertEqual([], payload["panes"])
+
+    def test_instance_ids_change_when_server_or_pane_process_changes(self):
+        base = tmux_status.PaneInfo(
+            "work", True, 0, 0, "code", 0, "%1", 100, "node",
+            True, False, None, "/tmp", "$1", 1000, "@1", 500, 900,
+        )
+        changed = tmux_status.PaneInfo(
+            "work", True, 0, 0, "code", 0, "%1", 101, "node",
+            True, False, None, "/tmp", "$1", 1000, "@1", 500, 900,
+        )
+        restarted = tmux_status.PaneInfo(
+            "work", True, 0, 0, "code", 0, "%1", 100, "node",
+            True, False, None, "/tmp", "$1", 1000, "@1", 501, 901,
+        )
+        processes = {
+            100: tmux_status.ProcessInfo(100, 1, 0.0, 1, "S", "0:01", "zsh"),
+            101: tmux_status.ProcessInfo(101, 1, 0.0, 1, "S", "0:01", "zsh"),
+        }
+        original_status = tmux_status.build_statuses(
+            [base], processes, {}, 80.0, 1024.0
+        )[0]
+        changed_status = tmux_status.build_statuses(
+            [changed], processes, {}, 80.0, 1024.0
+        )[0]
+        restarted_status = tmux_status.build_statuses(
+            [restarted], processes, {}, 80.0, 1024.0
+        )[0]
+        self.assertNotEqual(
+            original_status.pane_instance_id,
+            changed_status.pane_instance_id,
+        )
+        self.assertNotEqual(
+            original_status.server_instance_id,
+            restarted_status.server_instance_id,
+        )
 
     def test_manual_mark_precedence(self):
         pane = tmux_status.PaneInfo(

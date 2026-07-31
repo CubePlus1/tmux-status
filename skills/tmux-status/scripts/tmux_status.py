@@ -18,7 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
+JSON_SCHEMA_VERSION = 2
 FIELD_SEPARATOR = "\x1f"
 TMUX_ESCAPED_FIELD_SEPARATOR = r"\037"
 DEFAULT_CPU_THRESHOLD = 80.0
@@ -85,6 +86,11 @@ class PaneInfo:
     pane_dead: bool
     pane_dead_status: Optional[int]
     current_path: str
+    session_id: str = ""
+    session_created: int = 0
+    window_id: str = ""
+    server_pid: int = 0
+    server_started: int = 0
 
     @property
     def locator(self) -> str:
@@ -111,6 +117,11 @@ class PaneStatus:
     activity_source: str
     note: str
     anomalies: List[str]
+    session_id: str = ""
+    session_created: int = 0
+    window_id: str = ""
+    server_instance_id: str = ""
+    pane_instance_id: str = ""
 
 
 def config_path() -> Path:
@@ -149,6 +160,11 @@ PANE_FIELDS = (
     "#{pane_dead}",
     "#{pane_dead_status}",
     "#{pane_current_path}",
+    "#{session_id}",
+    "#{session_created}",
+    "#{window_id}",
+    "#{pid}",
+    "#{start_time}",
 )
 
 
@@ -179,6 +195,11 @@ def parse_panes_output(output: str) -> List[PaneInfo]:
                 pane_dead=values[10] == "1",
                 pane_dead_status=dead_status,
                 current_path=values[12],
+                session_id=values[13],
+                session_created=int(values[14] or 0),
+                window_id=values[15],
+                server_pid=int(values[16] or 0),
+                server_started=int(values[17] or 0),
             )
         )
     return panes
@@ -397,6 +418,20 @@ def build_statuses(
 ) -> List[PaneStatus]:
     statuses = []
     for pane in panes:
+        server_instance_id = "{}:{}".format(
+            pane.server_pid,
+            pane.server_started,
+        )
+        pane_instance_id = ":".join(
+            (
+                server_instance_id,
+                pane.session_id,
+                str(pane.session_created),
+                pane.window_id,
+                pane.pane_id,
+                str(pane.pane_pid),
+            )
+        )
         tree = descendants(pane.pane_pid, processes)
         cpu = sum(process.cpu_percent for process in tree)
         memory_mb = sum(process.rss_kb for process in tree) / 1024.0
@@ -439,6 +474,11 @@ def build_statuses(
                 activity_source=source,
                 note=note,
                 anomalies=anomalies,
+                session_id=pane.session_id,
+                session_created=pane.session_created,
+                window_id=pane.window_id,
+                server_instance_id=server_instance_id,
+                pane_instance_id=pane_instance_id,
             )
         )
     return statuses
@@ -546,6 +586,15 @@ def collect_statuses(args: argparse.Namespace) -> List[PaneStatus]:
 
 def status_payload(statuses: List[PaneStatus], args: argparse.Namespace) -> dict:
     return {
+        "schema_version": JSON_SCHEMA_VERSION,
+        "tool_version": VERSION,
+        "server_instance_id": (
+            statuses[0].server_instance_id if statuses else None
+        ),
+        "producer": {
+            "name": "tmux-status",
+            "version": VERSION,
+        },
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "thresholds": {
             "cpu_percent": args.cpu_threshold,
