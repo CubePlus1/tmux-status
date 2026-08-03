@@ -43,11 +43,13 @@ jobs:
           shasum -a 256 -c SHA256SUMS
           uvx --from check-jsonschema==0.33.3 check-jsonschema \
             --schemafile tmux-status.schema.json fixtures/*.json
-          if uvx --from check-jsonschema==0.33.3 check-jsonschema \
-            --schemafile tmux-status.schema.json fixtures-invalid/*.json; then
-            echo "invalid tmux-status fixture unexpectedly passed" >&2
-            exit 1
-          fi
+          for fixture in fixtures-invalid/*.json; do
+            if uvx --from check-jsonschema==0.33.3 check-jsonschema \
+              --schemafile tmux-status.schema.json "$fixture"; then
+              echo "$fixture unexpectedly passed validation" >&2
+              exit 1
+            fi
+          done
 
       - name: Validate Skill
         run: |

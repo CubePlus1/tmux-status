@@ -400,11 +400,15 @@ def executable_name_matches_tool(name: str, tool: str) -> bool:
     return False
 
 
+def is_runtime_name(name: str) -> bool:
+    return name in RUNTIME_NAMES or bool(re.fullmatch(r"python\d+(?:\.\d+)+", name))
+
+
 def is_runtime_wrapper_process(process: ProcessInfo, tool: str) -> bool:
     names = executable_names(process.command)
     return (
         len(names) > 1
-        and names[0] in RUNTIME_NAMES
+        and is_runtime_name(names[0])
         and any(executable_name_matches_tool(name, tool) for name in names[1:])
     )
 
@@ -480,7 +484,7 @@ def tool_arguments_from_tokens(
 
     executable_index = index
     runtime_name = os.path.basename(tokens[index]).lower().lstrip("-")
-    if runtime_name in RUNTIME_NAMES or re.fullmatch(r"python\d+\.\d+", runtime_name):
+    if is_runtime_name(runtime_name):
         index += 1
         while index < len(tokens):
             token = tokens[index]
@@ -643,14 +647,19 @@ def session_id_from_arguments(
             token.startswith(option + "=") for option in CODEX_MULTI_VALUE_OPTIONS
         ):
             index += 1
+            value_count = 0
+            last_session_id = None
             while index < len(resume_arguments):
                 candidate = resume_arguments[index]
                 if candidate.startswith("-"):
                     break
+                value_count += 1
                 session_id = validated_uuid(candidate)
                 if session_id:
-                    return session_id, "cli_resume_argument"
+                    last_session_id = session_id
                 index += 1
+            if index == len(resume_arguments) and value_count > 1 and last_session_id:
+                return last_session_id, "cli_resume_argument"
             continue
         if token in CODEX_VALUE_OPTIONS:
             index += 2
@@ -663,8 +672,24 @@ def session_id_from_arguments(
     return None
 
 
+def configured_codex_sessions_root() -> Path:
+    codex_home = os.environ.get("CODEX_HOME")
+    data_root = Path(codex_home).expanduser() if codex_home else Path.home() / ".codex"
+    return data_root / "sessions"
+
+
+def path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def session_metadata_from_open_file(
-    tool: str, path: Path
+    tool: str,
+    path: Path,
+    session_roots: Optional[Dict[str, Path]] = None,
 ) -> Optional[Tuple[str, Optional[str]]]:
     """Read only identity metadata from a session file opened by the process."""
     if tool == "grok":
@@ -673,7 +698,12 @@ def session_metadata_from_open_file(
         session_id = validated_uuid(path.parent.name)
         return (session_id, None) if session_id else None
 
-    if tool != "codex" or "sessions" not in path.parts:
+    if tool != "codex":
+        return None
+    codex_sessions_root = (session_roots or {}).get(
+        "codex", configured_codex_sessions_root()
+    )
+    if not path_is_within(path, codex_sessions_root):
         return None
     if not path.name.startswith("rollout-") or path.suffix != ".jsonl":
         return None
@@ -696,8 +726,12 @@ def session_metadata_from_open_file(
     return None
 
 
-def session_id_from_open_file(tool: str, path: Path) -> Optional[str]:
-    metadata = session_metadata_from_open_file(tool, path)
+def session_id_from_open_file(
+    tool: str,
+    path: Path,
+    session_roots: Optional[Dict[str, Path]] = None,
+) -> Optional[str]:
+    metadata = session_metadata_from_open_file(tool, path, session_roots)
     return metadata[0] if metadata else None
 
 
@@ -909,6 +943,7 @@ def collect_agent_conversations(
     working_directory: Callable[[int], Optional[str]] = process_working_directory,
     arguments: Callable[[int], Optional[List[str]]] = process_arguments,
     instance_key: Optional[Callable[[int], str]] = None,
+    session_roots: Optional[Dict[str, Path]] = None,
 ) -> List[AgentConversation]:
     instance_key = instance_key or process_instance_key
     tool_processes: Dict[str, List[ProcessInfo]] = {}
@@ -965,7 +1000,7 @@ def collect_agent_conversations(
             )
             file_evidence: Dict[str, Tuple[str, Optional[str]]] = {}
             for path in open_paths(process.pid):
-                metadata = session_metadata_from_open_file(tool, path)
+                metadata = session_metadata_from_open_file(tool, path, session_roots)
                 if metadata:
                     session_id, metadata_cwd = metadata
                     file_evidence[session_id] = (str(path), metadata_cwd)

@@ -198,6 +198,20 @@ class TmuxStatusTests(unittest.TestCase):
             tmux_status.ProcessInfo(3, 0, 0.0, 1, "S", "0:01", "python -m codex run"),
         ]
         self.assertEqual(["codex", "grok"], tmux_status.detect_tools(processes))
+        self.assertTrue(
+            tmux_status.is_runtime_wrapper_process(
+                tmux_status.ProcessInfo(
+                    4,
+                    0,
+                    0.0,
+                    1,
+                    "S",
+                    "0:01",
+                    "python3.11 -m codex resume thread-id",
+                ),
+                "codex",
+            )
+        )
 
     def test_tool_detection_supports_versioned_grok_binary(self):
         process = tmux_status.ProcessInfo(
@@ -260,10 +274,12 @@ class TmuxStatusTests(unittest.TestCase):
 
     def test_codex_resume_skips_supported_value_options(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        image_id = "019fb21f-84c9-7692-8371-1f9aa3e75401"
         commands = (
             "codex resume -i image.png {}".format(codex_id),
             "codex resume -i one.png two.png {}".format(codex_id),
             "codex -i one.png two.png resume {}".format(codex_id),
+            "codex resume -i {} {}".format(image_id, codex_id),
             "codex resume --enable feature {}".format(codex_id),
             "codex resume --add-dir /tmp/extra {}".format(codex_id),
             "codex --model gpt-test resume --profile work {}".format(codex_id),
@@ -274,6 +290,20 @@ class TmuxStatusTests(unittest.TestCase):
                     (codex_id, "cli_resume_argument"),
                     tmux_status.session_id_from_command("codex", command),
                 )
+        self.assertIsNone(
+            tmux_status.session_id_from_command(
+                "codex", "codex resume -i {}".format(image_id)
+            )
+        )
+        self.assertEqual(
+            (codex_id, "cli_resume_argument"),
+            tmux_status.session_id_from_command(
+                "codex",
+                "codex resume -i image.png {} --enable feature {}".format(
+                    image_id, codex_id
+                ),
+            ),
+        )
 
     def test_reads_ids_from_open_codex_and_grok_session_files(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
@@ -299,11 +329,24 @@ class TmuxStatusTests(unittest.TestCase):
             events.write_text("", encoding="utf-8")
             self.assertEqual(
                 codex_id,
-                tmux_status.session_id_from_open_file("codex", rollout),
+                tmux_status.session_id_from_open_file(
+                    "codex", rollout, {"codex": root / "sessions"}
+                ),
             )
             self.assertEqual(
                 grok_id,
                 tmux_status.session_id_from_open_file("grok", events),
+            )
+
+            unrelated = root / "project" / "sessions" / rollout.name
+            unrelated.parent.mkdir(parents=True)
+            unrelated.write_text(
+                rollout.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+            self.assertIsNone(
+                tmux_status.session_id_from_open_file(
+                    "codex", unrelated, {"codex": root / "sessions"}
+                )
             )
 
     def test_collects_stable_mapping_from_open_session_file(self):
@@ -373,6 +416,7 @@ class TmuxStatusTests(unittest.TestCase):
                 open_paths=lambda pid: [rollout] if pid == 102 else [],
                 scrollback=lambda _pane_id: "",
                 working_directory=lambda _pid: "/tmp/project",
+                session_roots={"codex": Path(directory) / "sessions"},
             )
         self.assertEqual(1, len(conversations))
         self.assertEqual("open_session_file", conversations[0].identity_source)
@@ -509,6 +553,7 @@ class TmuxStatusTests(unittest.TestCase):
                     "resume",
                     codex_id,
                 ],
+                session_roots={"codex": Path(directory) / "sessions"},
             )
 
         self.assertEqual("confirmed", conversations[0].conversation_id_status)
@@ -544,6 +589,7 @@ class TmuxStatusTests(unittest.TestCase):
                 open_paths=lambda pid: [rollout] if pid == child.pid else [],
                 scrollback=lambda _pane_id: "",
                 working_directory=lambda _pid: "/process/project",
+                session_roots={"codex": Path(directory) / "sessions"},
             )
 
         self.assertEqual(1, len(conversations))
@@ -620,6 +666,7 @@ class TmuxStatusTests(unittest.TestCase):
                 open_paths=lambda pid: [rollout] if pid == child.pid else [],
                 scrollback=lambda _pane_id: "",
                 working_directory=lambda _pid: "/agent/project",
+                session_roots={"codex": Path(directory) / "sessions"},
             )
 
         self.assertEqual(1, len(conversations))
@@ -915,6 +962,7 @@ class TmuxStatusTests(unittest.TestCase):
                 open_paths=lambda _pid: [rollout],
                 scrollback=lambda _pane_id: "",
                 working_directory=lambda _pid: "/tmp/project",
+                session_roots={"codex": Path(directory) / "sessions"},
             )
 
         self.assertEqual(1, len(conversations))
