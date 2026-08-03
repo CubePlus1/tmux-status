@@ -296,6 +296,31 @@ class TmuxStatusTests(unittest.TestCase):
             tmux_status.is_runtime_wrapper_process(process, "codex", arguments)
         )
 
+    def test_bun_wrapper_consumes_value_taking_runtime_options(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        arguments = [
+            "bun",
+            "--cwd",
+            "/tmp/project",
+            "--config=/tmp/bunfig.toml",
+            "--preload",
+            "/tmp/register.ts",
+            "/opt/codex",
+            "resume",
+            codex_id,
+        ]
+        self.assertEqual(
+            (codex_id, "cli_resume_argument"),
+            tmux_status.session_id_from_arguments("codex", arguments),
+        )
+        self.assertEqual("codex", tmux_status.tool_for_arguments(arguments))
+        process = tmux_status.ProcessInfo(
+            101, 100, 0.0, 1, "S", "0:01", "bun --cwd /tmp/project /opt/codex"
+        )
+        self.assertTrue(
+            tmux_status.is_runtime_wrapper_process(process, "codex", arguments)
+        )
+
     def test_tool_detection_supports_versioned_grok_binary(self):
         process = tmux_status.ProcessInfo(
             1,

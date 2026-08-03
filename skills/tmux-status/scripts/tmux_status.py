@@ -63,6 +63,28 @@ RUNTIME_NAMES = {
     "python3",
 }
 PYTHON_VALUE_OPTIONS = {"-W", "-X", "--check-hash-based-pycs"}
+BUN_VALUE_OPTIONS = {
+    "-F",
+    "-c",
+    "-d",
+    "--conditions",
+    "--config",
+    "--console-depth",
+    "--cwd",
+    "--define",
+    "--dns-result-order",
+    "--drop",
+    "--elide-lines",
+    "--env-file",
+    "--extension-order",
+    "--filter",
+    "--loader",
+    "--main-fields",
+    "--max-http-header-size",
+    "--preload",
+    "--tsconfig-override",
+    "--user-agent",
+}
 NODE_VALUE_OPTIONS = {
     "-C",
     "-r",
@@ -398,7 +420,10 @@ def runtime_option_next_index(
     runtime_name: str, tokens: Sequence[str], index: int
 ) -> Optional[int]:
     token = tokens[index]
-    if runtime_name.startswith("python"):
+    if runtime_name == "bun":
+        options = BUN_VALUE_OPTIONS
+        short_options = ("-F", "-c", "-d")
+    elif runtime_name.startswith("python"):
         options = PYTHON_VALUE_OPTIONS
         short_options = ("-W", "-X")
     elif runtime_name in ("node", "nodejs"):
