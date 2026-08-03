@@ -797,6 +797,10 @@ def configured_session_root(
     )
     if configured_home:
         data_root = Path(configured_home).expanduser()
+    elif process_environment is not None and process_environment.get("HOME"):
+        data_root = Path(process_environment["HOME"]) / (
+            ".codex" if tool == "codex" else ".grok"
+        )
     elif tool == "codex":
         data_root = Path.home() / ".codex"
     elif tool == "grok":
@@ -1059,7 +1063,7 @@ def process_arguments(pid: int) -> Optional[List[str]]:
 
 
 def process_agent_home_environment(pid: int) -> Dict[str, str]:
-    """Read only agent data-root variables, never retain unrelated process secrets."""
+    """Read only agent home/data-root variables, never retain unrelated secrets."""
     environ_path = Path("/proc") / str(pid) / "environ"
     try:
         entries = environ_path.read_bytes().split(b"\0")
@@ -1070,7 +1074,7 @@ def process_agent_home_environment(pid: int) -> Dict[str, str]:
         entries = parse_darwin_environment(raw_procargs) if raw_procargs else []
     selected = {}
     for entry in entries:
-        for key in ("CODEX_HOME", "GROK_HOME"):
+        for key in ("CODEX_HOME", "GROK_HOME", "HOME"):
             prefix = (key + "=").encode()
             if entry.startswith(prefix):
                 selected[key] = os.fsdecode(entry[len(prefix) :])

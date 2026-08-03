@@ -685,6 +685,34 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual("confirmed", conversations[0].conversation_id_status)
         self.assertEqual(codex_id, conversations[0].conversation_id)
 
+    def test_uses_inspected_process_home_for_default_codex_root(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane()
+        process = tmux_status.ProcessInfo(
+            101, 100, 0.0, 1, "S", "0:01", "/usr/local/bin/codex"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            agent_home = Path(directory) / "agent-home"
+            rollout_dir = agent_home / ".codex" / "sessions" / "2026" / "08" / "03"
+            rollout_dir.mkdir(parents=True)
+            rollout = rollout_dir / "rollout-{}.jsonl".format(codex_id)
+            rollout.write_text(
+                json.dumps({"type": "session_meta", "payload": {"id": codex_id}})
+                + "\n",
+                encoding="utf-8",
+            )
+            conversations = tmux_status.collect_agent_conversations(
+                pane,
+                [process],
+                open_paths=lambda _pid: [rollout],
+                scrollback=lambda _pane_id: "",
+                working_directory=lambda _pid: "/tmp/project",
+                environment=lambda _pid: {"HOME": str(agent_home)},
+            )
+
+        self.assertEqual("confirmed", conversations[0].conversation_id_status)
+        self.assertEqual(codex_id, conversations[0].conversation_id)
+
     def test_reads_agent_home_from_darwin_process_environment(self):
         raw_procargs = (
             struct.pack("=i", 1)
@@ -692,6 +720,7 @@ class TmuxStatusTests(unittest.TestCase):
             + b"codex\0"
             + b"UNRELATED=discard-me\0"
             + b"CODEX_HOME=/tmp/Custom Codex\0"
+            + b"HOME=/Users/agent\0"
         )
         with patch.object(tmux_status.sys, "platform", "darwin"):
             with patch.object(
@@ -704,7 +733,10 @@ class TmuxStatusTests(unittest.TestCase):
                 ):
                     environment = tmux_status.process_agent_home_environment(101)
 
-        self.assertEqual({"CODEX_HOME": "/tmp/Custom Codex"}, environment)
+        self.assertEqual(
+            {"CODEX_HOME": "/tmp/Custom Codex", "HOME": "/Users/agent"},
+            environment,
+        )
 
     def test_reads_lossless_arguments_from_darwin_procargs(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
@@ -749,6 +781,23 @@ class TmuxStatusTests(unittest.TestCase):
                     Path("/reporter/custom-codex/sessions"),
                     tmux_status.configured_session_root("codex", None),
                 )
+
+    def test_process_home_controls_default_agent_data_root(self):
+        with patch.object(
+            tmux_status.Path, "home", return_value=Path("/reporter-home")
+        ):
+            self.assertEqual(
+                Path("/agent-home/.codex/sessions"),
+                tmux_status.configured_session_root(
+                    "codex", {"HOME": "/agent-home"}
+                ),
+            )
+            self.assertEqual(
+                Path("/agent-home/.grok/sessions"),
+                tmux_status.configured_session_root(
+                    "grok", {"HOME": "/agent-home"}
+                ),
+            )
 
     def test_open_session_file_has_priority_over_wrapper_resume_argument(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"

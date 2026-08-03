@@ -67,7 +67,9 @@ jobs:
             '.panes[0].dead = true' \
             '.panes[0].process_count = 0' \
             '.panes[0].tools = []' \
-            '.panes[0].agent_conversations[0].working_directory = ""'; do
+            '.panes[0].agent_conversations[0].working_directory = ""' \
+            '.panes[0].agent_conversations[0].working_directory = "project" | .panes[0].agent_conversations[0].resume_command = ("codex resume -C project " + .panes[0].agent_conversations[0].conversation_id) | .recovery[0].working_directory = "project" | .recovery[0].resume_command = ("codex resume -C project " + .recovery[0].conversation_id)' \
+            '.panes[0].agent_conversations[0].source_path = "session\u0000path" | .recovery[0].source_path = "session\u0000path"'; do
             if jq "$mutation" fixtures/confirmed.json | \
               python3 validate_semantics.py -; then
               echo "contradictory v3 identity unexpectedly passed: $mutation" >&2

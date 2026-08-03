@@ -199,7 +199,7 @@
                   ]
                 },
                 "stable_mapping_key": { "type": "string", "minLength": 1 },
-                "working_directory": { "type": "string", "minLength": 1 },
+                "working_directory": { "type": "string", "minLength": 1, "pattern": "^/" },
                 "resume_command": { "type": "string", "minLength": 1 }
               }
             },
@@ -355,7 +355,7 @@
                 ]
               },
               "stable_mapping_key": { "type": "string", "minLength": 1 },
-              "working_directory": { "type": "string", "minLength": 1 },
+              "working_directory": { "type": "string", "minLength": 1, "pattern": "^/" },
               "resume_command": { "type": "string", "minLength": 1 }
             }
           },

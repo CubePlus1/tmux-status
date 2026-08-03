@@ -29,8 +29,20 @@ def expected_resume(tool, conversation_id, cwd):
     return "grok --cwd {} --resume {}".format(shlex.quote(cwd), conversation_id)
 
 
+def contains_nul(value):
+    if isinstance(value, str):
+        return "\0" in value
+    if isinstance(value, list):
+        return any(contains_nul(item) for item in value)
+    if isinstance(value, dict):
+        return any("\0" in key or contains_nul(item) for key, item in value.items())
+    return False
+
+
 def validate(payload):
     errors = []
+    if contains_nul(payload):
+        errors.append("string fields cannot contain NUL")
     seen_process_instances = set()
     process_instance_by_pid = {}
     seen_pane_ids = set()
@@ -171,6 +183,8 @@ def validate(payload):
                     errors.append("stable_mapping_key does not match tool and ID")
                 if not isinstance(cwd, str) or not cwd:
                     errors.append("confirmed working_directory must be nonempty")
+                elif not Path(cwd).is_absolute():
+                    errors.append("confirmed working_directory must be absolute")
                 elif conversation.get("resume_command") != expected_resume(
                     tool, conversation_id, cwd
                 ):
