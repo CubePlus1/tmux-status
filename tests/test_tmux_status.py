@@ -366,6 +366,68 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual(str(rollout), conversations[0].source_path)
         self.assertEqual([101, 102], conversations[0].process_pids)
 
+    def test_confirmed_conversation_uses_agent_working_directory(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane("/pane/project")
+        process = tmux_status.ProcessInfo(
+            101,
+            100,
+            0.0,
+            1,
+            "S",
+            "0:01",
+            "codex -C /agent/project resume {}".format(codex_id),
+        )
+        conversations = tmux_status.collect_agent_conversations(
+            pane,
+            [process],
+            open_paths=lambda _pid: [],
+            scrollback=lambda _pane_id: "",
+            working_directory=lambda _pid: "/process/project",
+        )
+
+        self.assertEqual("/agent/project", conversations[0].working_directory)
+        self.assertEqual(
+            "codex resume -C /agent/project {}".format(codex_id),
+            conversations[0].resume_command,
+        )
+
+    def test_runtime_wrapper_folds_into_confirmed_child_invocation(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane()
+        wrapper = tmux_status.ProcessInfo(
+            101, 100, 0.0, 1, "S", "0:01", "node /opt/codex"
+        )
+        child = tmux_status.ProcessInfo(
+            102, 101, 0.0, 1, "S", "0:01", "/usr/local/bin/codex"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sessions" / "2026" / "08" / "03"
+            path.mkdir(parents=True)
+            rollout = path / "rollout-{}.jsonl".format(codex_id)
+            rollout.write_text(
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {"id": codex_id, "cwd": "/agent/project"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            conversations = tmux_status.collect_agent_conversations(
+                pane,
+                [wrapper, child],
+                open_paths=lambda pid: [rollout] if pid == child.pid else [],
+                scrollback=lambda _pane_id: "",
+                working_directory=lambda _pid: "/process/project",
+            )
+
+        self.assertEqual(1, len(conversations))
+        self.assertEqual("confirmed", conversations[0].conversation_id_status)
+        self.assertEqual([101, 102], conversations[0].process_pids)
+        self.assertEqual("/agent/project", conversations[0].working_directory)
+
     def test_unmatched_process_remains_unknown_beside_confirmed_conversation(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
         pane = self.pane()
@@ -574,6 +636,7 @@ class TmuxStatusTests(unittest.TestCase):
                     ):
                         self.assertIn(key, pane)
                     for conversation in pane["agent_conversations"]:
+                        self.assertIsInstance(conversation["working_directory"], str)
                         if conversation["conversation_id_status"] == "unknown":
                             self.assertIsNone(conversation["conversation_id"])
                             self.assertIsNone(conversation["stable_mapping_key"])

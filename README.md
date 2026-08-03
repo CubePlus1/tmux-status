@@ -72,7 +72,7 @@ For every detected Codex or Grok process, JSON and Markdown reports record the
 agent conversation separately from tmux identity:
 
 - `tmux_session_name`, `tmux_window_index`, `tmux_pane_index`, and `pane_id`;
-- the pane root `pane_pid`, agent `process_pids`, and `working_directory`;
+- the pane root `pane_pid`, agent `process_pids`, and each conversation's own `working_directory`;
 - `codex_thread_id` or `grok_session_id` in `conversation_id_kind`;
 - the verified UUID in `conversation_id`, its evidence source, and source path;
 - a stable mapping key such as `codex:<UUID>` or `grok:<UUID>`;
@@ -93,6 +93,9 @@ Evidence is checked in this order:
 2. an explicit UUID supplied to the live CLI through `resume`/`--resume` (or
    Grok `--session-id` when creating a named new session);
 3. one unambiguous explicit resume UUID in the pane's recent scrollback.
+
+Recovery commands use the matched process cwd, an explicit CLI cwd, or session
+metadata cwd; they do not substitute the pane cwd for a different agent cwd.
 
 Codex rollout metadata is read only from its first `session_meta` record. Grok
 IDs are read from the UUID session directory containing the process's open

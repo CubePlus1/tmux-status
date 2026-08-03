@@ -33,7 +33,8 @@
     "working_directory": "/tmp/project", "agent_conversations": [{
       "tool": "codex", "conversation_id": null, "conversation_id_status": "unknown",
       "conversation_id_kind": "codex_thread_id", "identity_source": "conflicting_evidence",
-      "source_path": null, "process_pids": [101], "stable_mapping_key": null,
+      "source_path": null, "working_directory": "/tmp/project",
+      "process_pids": [101], "stable_mapping_key": null,
       "resume_command": null, "evidence": "multiple distinct resume UUIDs found"
     }]
   }]

@@ -8,6 +8,7 @@ Rules:
 
 - `session` and `tmux_session_name` are tmux names, never agent IDs.
 - A confirmed conversation requires a UUID, `stable_mapping_key`, and `resume_command`.
+- Every conversation records its own `working_directory`; pane cwd is never substituted for a different agent cwd.
 - Missing or conflicting evidence is `unknown` with null ID/key/command.
 - PID, cwd, pane title, and recency are never identity evidence.
 - Payloads contain no prompt, response, reasoning, or pane content.

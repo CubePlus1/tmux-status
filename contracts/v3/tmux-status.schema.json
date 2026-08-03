@@ -86,6 +86,7 @@
         "conversation_id_kind",
         "identity_source",
         "source_path",
+        "working_directory",
         "process_pids",
         "stable_mapping_key",
         "resume_command",
@@ -107,6 +108,7 @@
           ]
         },
         "source_path": { "type": ["string", "null"] },
+        "working_directory": { "type": "string" },
         "process_pids": { "$ref": "#/$defs/processPids" },
         "stable_mapping_key": { "type": ["string", "null"] },
         "resume_command": { "type": ["string", "null"] },
@@ -116,6 +118,19 @@
     "conversation": {
       "allOf": [
         { "$ref": "#/$defs/conversationCommon" },
+        {
+          "if": { "properties": { "tool": { "const": "codex" } } },
+          "then": {
+            "properties": {
+              "conversation_id_kind": { "const": "codex_thread_id" }
+            }
+          },
+          "else": {
+            "properties": {
+              "conversation_id_kind": { "const": "grok_session_id" }
+            }
+          }
+        },
         {
           "oneOf": [
             {
@@ -233,6 +248,19 @@
         "resume_command": { "type": ["string", "null"] }
       },
       "allOf": [
+        {
+          "if": { "properties": { "tool": { "const": "codex" } } },
+          "then": {
+            "properties": {
+              "conversation_id_kind": { "const": "codex_thread_id" }
+            }
+          },
+          "else": {
+            "properties": {
+              "conversation_id_kind": { "const": "grok_session_id" }
+            }
+          }
+        },
         {
           "if": { "properties": { "conversation_id_status": { "const": "confirmed" } } },
           "then": {

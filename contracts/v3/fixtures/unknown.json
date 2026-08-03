@@ -49,6 +49,7 @@
           "tool": "grok", "conversation_id": null,
           "conversation_id_status": "unknown", "conversation_id_kind": "grok_session_id",
           "identity_source": "unavailable", "source_path": null,
+          "working_directory": "/tmp/project",
           "process_pids": [102], "stable_mapping_key": null, "resume_command": null,
           "evidence": "no explicit UUID found"
         }

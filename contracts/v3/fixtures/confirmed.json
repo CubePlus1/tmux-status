@@ -71,6 +71,7 @@
           "conversation_id_kind": "codex_thread_id",
           "identity_source": "open_session_file",
           "source_path": "/tmp/codex/sessions/rollout.jsonl",
+          "working_directory": "/tmp/project",
           "process_pids": [101],
           "stable_mapping_key": "codex:019fc5d1-40e4-75a2-89f2-188ae5efb2c4",
           "resume_command": "codex resume -C /tmp/project 019fc5d1-40e4-75a2-89f2-188ae5efb2c4",
