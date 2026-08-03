@@ -62,6 +62,9 @@ def validate(payload):
 
     projected = []
     for pane in panes:
+        for index_field in ("tmux_window_index", "tmux_pane_index"):
+            if pane.get(index_field, 0) > MAX_SAFE_INTEGER:
+                errors.append("{} exceeds safe integer range".format(index_field))
         pane_id = pane.get("pane_id")
         pane_instance = pane.get("pane_instance_id")
         if pane_id in seen_pane_ids:
