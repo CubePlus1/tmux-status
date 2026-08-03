@@ -887,15 +887,9 @@ def list_open_paths(pid: int) -> List[OpenProcessFile]:
         paths = []
         try:
             for descriptor in proc_directory.iterdir():
-                try:
-                    target = Path(os.readlink(str(descriptor)))
-                    descriptor_stat = descriptor.stat()
-                except OSError:
-                    continue
-                if target.is_absolute():
-                    paths.append(
-                        OpenProcessFile(target, descriptor, descriptor_stat.st_ino)
-                    )
+                opened_file = capture_open_descriptor(descriptor)
+                if opened_file is not None:
+                    paths.append(opened_file)
         except OSError:
             return []
         return paths
@@ -921,6 +915,24 @@ def list_open_paths(pid: int) -> List[OpenProcessFile]:
         if path.is_absolute():
             paths.append(OpenProcessFile(path, path, descriptor_inode))
     return paths
+
+
+def capture_open_descriptor(descriptor: Path) -> Optional[OpenProcessFile]:
+    try:
+        first_target = Path(os.readlink(str(descriptor)))
+        first_stat = descriptor.stat()
+        second_target = Path(os.readlink(str(descriptor)))
+        second_stat = descriptor.stat()
+    except OSError:
+        return None
+    if (
+        first_target != second_target
+        or first_stat.st_ino != second_stat.st_ino
+        or first_stat.st_dev != second_stat.st_dev
+        or not first_target.is_absolute()
+    ):
+        return None
+    return OpenProcessFile(first_target, descriptor, first_stat.st_ino)
 
 
 def process_working_directory(pid: int) -> Optional[str]:

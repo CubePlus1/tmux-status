@@ -528,6 +528,21 @@ class TmuxStatusTests(unittest.TestCase):
                 )
             )
 
+    def test_descriptor_capture_rejects_a_changed_fd_target(self):
+        descriptor = Path("/proc/101/fd/7")
+        descriptor_stat = os.stat(__file__)
+        with patch.object(
+            tmux_status.os,
+            "readlink",
+            side_effect=["/tmp/old-session", "/tmp/new-session"],
+        ):
+            with patch.object(
+                tmux_status.Path, "stat", return_value=descriptor_stat
+            ):
+                self.assertIsNone(
+                    tmux_status.capture_open_descriptor(descriptor)
+                )
+
     def test_collects_stable_mapping_from_open_session_file(self):
         grok_id = "019fc532-c5ba-7b90-a199-5ecd6d99bf69"
         pane = self.pane("/tmp/my project")

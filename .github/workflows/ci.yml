@@ -53,6 +53,7 @@ jobs:
             '.producer.version = "0.3.1"' \
             '.panes[0].pane_id = "%99"' \
             '.panes[0].pane_instance_id = "wrong"' \
+            '.panes[0].target = "other:9.9" | .panes[0].tmux_target = "other:9.9" | .recovery[0].tmux_target = "other:9.9"' \
             '.panes[0].session_created = 9007199254740992' \
             '.panes[0].agent_conversations[0].process_instances = {"2147483648":"2147483648:oversized"} | .recovery[0].process_instances = {"2147483648":"2147483648:oversized"}' \
             '.panes[0].agent_conversations[0].process_instances = {"101":"202:wrong-process"}' \

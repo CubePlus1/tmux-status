@@ -81,6 +81,13 @@ def validate(payload):
                         legacy_field
                     )
                 )
+        expected_target = "{}:{}.{}".format(
+            pane.get("tmux_session_name"),
+            pane.get("tmux_window_index"),
+            pane.get("tmux_pane_index"),
+        )
+        if pane.get("tmux_target") != expected_target:
+            errors.append("tmux_target does not match pane coordinates")
         expected_pane_instance_id = "{}:{}:{}:{}:{}:{}".format(
             pane.get("server_instance_id"),
             pane.get("session_id"),

@@ -7,8 +7,10 @@ Schema v3 is a strict additive successor to v2. Every v2 producer and tmux insta
 Rules:
 
 - `session` and `tmux_session_name` are tmux names, never agent IDs.
+- `target` and `tmux_target` are derived exactly from the tmux session, window index, and pane index.
 - A confirmed conversation requires process-associated file or CLI evidence, a UUID, nonempty `working_directory`, `stable_mapping_key` derived exactly as `<tool>:<conversation_id>`, and `resume_command`.
 - `pre_restart` is true exactly for `report_type: "recovery"` and false for status or snapshot reports.
+- Indexed tmux identity components use bounded numeric forms, and `generated_at` intentionally excludes RFC 3339 leap-second `:60` values.
 - Every conversation records its own `working_directory`; pane cwd is never substituted for a different agent cwd, and missing process-associated cwd keeps recovery unknown.
 - `process_instances` maps each signed 32-bit agent PID to exactly one `<pid>:<nonempty-incarnation>` start identity, and one process incarnation cannot be reused by multiple conversations; it is never conversation-ID evidence.
 - Missing or conflicting evidence is `unknown` with null ID/key/command.
