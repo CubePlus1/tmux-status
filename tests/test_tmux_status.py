@@ -235,6 +235,34 @@ class TmuxStatusTests(unittest.TestCase):
             tmux_status.session_id_from_command("grok", "grok --resume 12345")
         )
 
+    def test_codex_resume_must_be_the_actual_subcommand(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        misleading_commands = (
+            "codex exec please resume {}".format(codex_id),
+            "codex please resume {}".format(codex_id),
+            "node /opt/codex exec resume {}".format(codex_id),
+        )
+        for command in misleading_commands:
+            with self.subTest(command=command):
+                self.assertIsNone(
+                    tmux_status.session_id_from_command("codex", command)
+                )
+
+    def test_codex_resume_skips_supported_value_options(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        commands = (
+            "codex resume -i image.png {}".format(codex_id),
+            "codex resume --enable feature {}".format(codex_id),
+            "codex resume --add-dir /tmp/extra {}".format(codex_id),
+            "codex --model gpt-test resume --profile work {}".format(codex_id),
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertEqual(
+                    (codex_id, "cli_resume_argument"),
+                    tmux_status.session_id_from_command("codex", command),
+                )
+
     def test_reads_ids_from_open_codex_and_grok_session_files(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
         grok_id = "019fc532-c5ba-7b90-a199-5ecd6d99bf69"
@@ -336,6 +364,35 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual("open_session_file", conversations[0].identity_source)
         self.assertEqual(str(rollout), conversations[0].source_path)
         self.assertEqual([101, 102], conversations[0].process_pids)
+
+    def test_unmatched_process_remains_unknown_beside_confirmed_conversation(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane()
+        confirmed = tmux_status.ProcessInfo(
+            101,
+            100,
+            0.0,
+            1,
+            "S",
+            "0:01",
+            "codex resume {}".format(codex_id),
+        )
+        unmatched = tmux_status.ProcessInfo(
+            102, 100, 0.0, 1, "S", "0:01", "/usr/local/bin/codex"
+        )
+        conversations = tmux_status.collect_agent_conversations(
+            pane,
+            [confirmed, unmatched],
+            open_paths=lambda _pid: [],
+            scrollback=lambda _pane_id: "",
+        )
+
+        self.assertEqual(2, len(conversations))
+        self.assertEqual("confirmed", conversations[0].conversation_id_status)
+        self.assertEqual([101], conversations[0].process_pids)
+        self.assertEqual("unknown", conversations[1].conversation_id_status)
+        self.assertEqual([102], conversations[1].process_pids)
+        self.assertIsNone(conversations[1].conversation_id)
 
     def test_unknown_id_is_explicit_and_never_guessed_from_pid(self):
         pane = self.pane()

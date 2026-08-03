@@ -401,6 +401,105 @@ def command_tokens(command: str) -> List[str]:
         return re.findall(r"[^\s\"']+", command)
 
 
+def tool_arguments(tool: str, command: str) -> Optional[List[str]]:
+    """Return arguments after the actual tool executable, unwrapping known runtimes."""
+    tokens = command_tokens(command)
+    if not tokens:
+        return None
+
+    index = 0
+    first_name = os.path.basename(tokens[index]).lower().lstrip("-")
+    if first_name == "env":
+        index += 1
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "--":
+                index += 1
+                break
+            if token in ("-u", "--unset", "-C", "--chdir", "-S", "--split-string"):
+                index += 2
+                continue
+            if token.startswith("-") or "=" in token:
+                index += 1
+                continue
+            break
+        if index >= len(tokens):
+            return None
+
+    executable_index = index
+    runtime_name = os.path.basename(tokens[index]).lower().lstrip("-")
+    if runtime_name in RUNTIME_NAMES or re.fullmatch(r"python\d+\.\d+", runtime_name):
+        index += 1
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "-m" and index + 1 < len(tokens):
+                executable_index = index + 1
+                break
+            if token in ("-c", "-e", "--eval", "-p", "--print"):
+                return None
+            if not token.startswith("-"):
+                executable_index = index
+                break
+            index += 1
+        else:
+            return None
+
+    executable_name = os.path.basename(tokens[executable_index]).lower().lstrip("-")
+    aliases = TOOL_NAMES.get(tool, ())
+    if executable_name not in aliases:
+        if tool == "codex" and not re.fullmatch(r"codex(?:-cli)?", executable_name):
+            return None
+        if tool == "grok" and not re.fullmatch(
+            r"grok(?:-cli)?(?:-\d+(?:\.\d+)+(?:-[a-z0-9._-]+)*)?",
+            executable_name,
+        ):
+            return None
+    return tokens[executable_index + 1 :]
+
+
+CODEX_VALUE_OPTIONS = {
+    "-a",
+    "--add-dir",
+    "--ask-for-approval",
+    "-c",
+    "--cd",
+    "--config",
+    "-C",
+    "--disable",
+    "--enable",
+    "-i",
+    "--image",
+    "--local-provider",
+    "-m",
+    "--model",
+    "-p",
+    "--profile",
+    "--remote",
+    "--remote-auth-token-env",
+    "-s",
+    "--sandbox",
+}
+
+
+def codex_subcommand_arguments(arguments: List[str], subcommand: str) -> Optional[List[str]]:
+    """Return subcommand argv only when it occupies Codex's command position."""
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        if token == "--":
+            return None
+        if token in CODEX_VALUE_OPTIONS:
+            index += 2
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        if token != subcommand:
+            return None
+        return arguments[index + 1 :]
+    return None
+
+
 def session_id_from_command(tool: str, command: str) -> Optional[Tuple[str, str]]:
     """Return an explicit UUID and its CLI evidence type, never a title or PID."""
     tokens = command_tokens(command)
@@ -433,31 +532,20 @@ def session_id_from_command(tool: str, command: str) -> Optional[Tuple[str, str]
 
     if tool != "codex":
         return None
-    try:
-        resume_index = tokens.index("resume")
-    except ValueError:
+    arguments = tool_arguments(tool, command)
+    if arguments is None:
         return None
-    value_options = {
-        "-a",
-        "--ask-for-approval",
-        "-c",
-        "--config",
-        "-C",
-        "--cd",
-        "-m",
-        "--model",
-        "--remote",
-        "-s",
-        "--sandbox",
-    }
-    index = resume_index + 1
-    while index < len(tokens):
-        token = tokens[index]
+    resume_arguments = codex_subcommand_arguments(arguments, "resume")
+    if resume_arguments is None:
+        return None
+    index = 0
+    while index < len(resume_arguments):
+        token = resume_arguments[index]
         if token in ("--last", "--all"):
             return None
         if token == "--":
             return None
-        if token in value_options:
+        if token in CODEX_VALUE_OPTIONS:
             index += 2
             continue
         if token.startswith("-"):
@@ -621,6 +709,8 @@ def collect_agent_conversations(
     for tool, matching_processes in sorted(tool_processes.items()):
         confirmed: Dict[str, dict] = {}
         conflicts = []
+        unresolved_pids = []
+        conflicting_pids = []
         for process in matching_processes:
             file_evidence: Dict[str, str] = {}
             for path in open_paths(process.pid):
@@ -641,6 +731,7 @@ def collect_agent_conversations(
                 conflicts.append(
                     "PID {} opened multiple {} session files".format(process.pid, tool)
                 )
+                conflicting_pids.append(process.pid)
                 continue
 
             command_evidence = session_id_from_command(tool, process.command)
@@ -650,6 +741,8 @@ def collect_agent_conversations(
                     session_id, {"pids": [], "source": source, "path": None}
                 )
                 entry["pids"].append(process.pid)
+                continue
+            unresolved_pids.append(process.pid)
 
         if confirmed:
             for session_id, evidence in sorted(confirmed.items()):
@@ -663,22 +756,35 @@ def collect_agent_conversations(
                         evidence["path"],
                     )
                 )
-            if conflicts:
+            if conflicts or unresolved_pids:
+                evidence_parts = list(conflicts)
+                if unresolved_pids:
+                    evidence_parts.append(
+                        "no explicit UUID found for {} process(es)".format(
+                            len(unresolved_pids)
+                        )
+                    )
                 conversations.append(
                     unknown_conversation(
                         tool,
-                        [process.pid for process in matching_processes],
-                        "; ".join(conflicts),
-                        "conflicting_evidence",
+                        sorted(conflicting_pids + unresolved_pids),
+                        "; ".join(evidence_parts),
+                        "conflicting_evidence" if conflicts else "unavailable",
                     )
                 )
             continue
 
         if conflicts:
+            if unresolved_pids:
+                conflicts.append(
+                    "no explicit UUID found for {} process(es)".format(
+                        len(unresolved_pids)
+                    )
+                )
             conversations.append(
                 unknown_conversation(
                     tool,
-                    [process.pid for process in matching_processes],
+                    sorted(conflicting_pids + unresolved_pids),
                     "; ".join(conflicts),
                     "conflicting_evidence",
                 )
