@@ -68,6 +68,7 @@ NODE_VALUE_OPTIONS = {
     "--conditions",
     "--diagnostic-dir",
     "--env-file",
+    "--env-file-if-exists",
     "--experimental-loader",
     "--heapsnapshot-signal",
     "--icu-data-dir",
@@ -1852,6 +1853,10 @@ def collect_statuses(
 ) -> List[PaneStatus]:
     panes = collect_panes()
     processes = collect_processes() if panes else {}
+    # A second tmux snapshot after the process snapshot proves that recovery
+    # evidence still belongs to the listed pane/root rather than a reused PID.
+    if include_conversations and panes:
+        panes = collect_panes()
     return build_statuses(
         panes,
         processes,

@@ -271,6 +271,8 @@ class TmuxStatusTests(unittest.TestCase):
             "-r",
             "preload",
             "--import=loader",
+            "--env-file-if-exists",
+            "/tmp/agent.env",
             "/tmp/my tools/codex",
             "resume",
             codex_id,
@@ -1404,6 +1406,34 @@ class TmuxStatusTests(unittest.TestCase):
 
         self.assertEqual(1, len(conversations))
         self.assertEqual({"101", "102"}, set(conversations[0].process_instances))
+
+    def test_revalidates_pane_after_process_snapshot_before_recovery(self):
+        live_pane = self.pane()
+        dead_pane = self.pane()
+        dead_pane.pane_dead = True
+        dead_pane.pane_dead_status = 0
+        replacement = tmux_status.ProcessInfo(
+            100, 1, 0.0, 1, "S", "0:01", "/usr/local/bin/codex"
+        )
+        args = tmux_status.build_parser().parse_args(["status", "--json"])
+        with patch.object(
+            tmux_status, "collect_panes", side_effect=[[live_pane], [dead_pane]]
+        ) as collect_panes:
+            with patch.object(
+                tmux_status, "collect_processes", return_value={100: replacement}
+            ):
+                with patch.object(
+                    tmux_status, "collect_agent_conversations"
+                ) as collect_conversations:
+                    with patch.object(tmux_status, "load_marks", return_value={}):
+                        statuses = tmux_status.collect_statuses(
+                            args, include_conversations=True
+                        )
+
+        self.assertEqual(2, collect_panes.call_count)
+        collect_conversations.assert_not_called()
+        self.assertTrue(statuses[0].dead)
+        self.assertEqual([], statuses[0].agent_conversations)
 
     def test_human_status_and_watch_skip_conversation_collection(self):
         status_args = tmux_status.build_parser().parse_args(["status"])

@@ -99,7 +99,7 @@ def validate(payload):
                     errors.append(
                         "process_instances PID exceeds signed 32-bit range"
                     )
-                if not instance_key.startswith(pid + ":"):
+                if not instance_key.startswith(pid + ":") or len(instance_key) == len(pid) + 1:
                     errors.append("process instance key does not match its PID")
                 process_instance = (pid, instance_key)
                 if process_instance in seen_process_instances:
