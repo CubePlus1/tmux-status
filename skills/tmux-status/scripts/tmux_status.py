@@ -383,12 +383,30 @@ def tool_for_process(process: ProcessInfo) -> Optional[str]:
     return None
 
 
-def detect_tools(processes: Iterable[ProcessInfo]) -> List[str]:
+def tool_for_arguments(tokens: Optional[Sequence[str]]) -> Optional[str]:
+    if tokens is None:
+        return None
+    for tool in sorted(TOOL_NAMES):
+        if tool_arguments_from_tokens(tool, tokens) is not None:
+            return tool
+    return None
+
+
+def detect_tools(
+    processes: Iterable[ProcessInfo],
+    arguments: Optional[Callable[[int], Optional[List[str]]]] = None,
+) -> List[str]:
+    argument_reader = arguments or process_arguments
     found: Set[str] = set()
     for process in processes:
         if "Z" in process.state.upper():
             continue
-        tool = tool_for_process(process)
+        lossless_arguments = argument_reader(process.pid)
+        tool = (
+            tool_for_arguments(lossless_arguments)
+            if lossless_arguments is not None
+            else tool_for_process(process)
+        )
         if tool:
             found.add(tool)
     return sorted(found)
@@ -1031,6 +1049,8 @@ def append_unknown_conversations(
     processes_by_pid: Dict[int, ProcessInfo],
     evidence: str,
     identity_source: str = "unavailable",
+    conflicting_process_pids: Optional[Set[int]] = None,
+    unavailable_evidence: Optional[str] = None,
 ) -> None:
     remaining = set(process_pids)
     invocation_groups = []
@@ -1051,6 +1071,9 @@ def append_unknown_conversations(
         remaining -= group
         invocation_groups.append(sorted(group))
     for group_pids in invocation_groups:
+        group_has_conflict = bool(
+            set(group_pids) & (conflicting_process_pids or set())
+        )
         native_pids = [
             pid
             for pid in group_pids
@@ -1062,9 +1085,9 @@ def append_unknown_conversations(
                 tool,
                 group_pids,
                 [process_keys[pid] for pid in group_pids],
-                evidence,
+                evidence if group_has_conflict else unavailable_evidence or evidence,
                 cwd,
-                identity_source,
+                "conflicting_evidence" if group_has_conflict else identity_source,
             )
         )
 
@@ -1082,10 +1105,17 @@ def collect_agent_conversations(
 ) -> List[AgentConversation]:
     instance_key = instance_key or process_instance_key
     tool_processes: Dict[str, List[ProcessInfo]] = {}
+    observed_arguments: Dict[int, Optional[List[str]]] = {}
     for process in tree:
         if "Z" in process.state.upper():
             continue
-        tool = tool_for_process(process)
+        lossless_arguments = arguments(process.pid)
+        observed_arguments[process.pid] = lossless_arguments
+        tool = (
+            tool_for_arguments(lossless_arguments)
+            if lossless_arguments is not None
+            else tool_for_process(process)
+        )
         if tool:
             tool_processes.setdefault(tool, []).append(process)
 
@@ -1101,7 +1131,7 @@ def collect_agent_conversations(
         for process in matching_processes:
             process_keys[process.pid] = instance_key(process.pid)
             observed_cwd = working_directory(process.pid)
-            lossless_arguments = arguments(process.pid)
+            lossless_arguments = observed_arguments[process.pid]
             process_argvs[process.pid] = lossless_arguments
             process_environments[process.pid] = environment(process.pid)
             command_cwd = (
@@ -1305,12 +1335,15 @@ def collect_agent_conversations(
                 )
             if conflicts or unavailable_reasons or unresolved_pids:
                 evidence_parts = list(conflicts) + unavailable_reasons
+                unavailable_parts = list(unavailable_reasons)
                 if unresolved_pids:
-                    evidence_parts.append(
+                    unresolved_reason = (
                         "no explicit UUID found for {} process(es)".format(
                             len(unresolved_pids)
                         )
                     )
+                    evidence_parts.append(unresolved_reason)
+                    unavailable_parts.append(unresolved_reason)
                 append_unknown_conversations(
                     conversations,
                     tool,
@@ -1320,8 +1353,11 @@ def collect_agent_conversations(
                     process_cwds,
                     process_keys,
                     processes_by_pid,
-                    "; ".join(evidence_parts),
-                    "conflicting_evidence" if conflicts else "unavailable",
+                    "; ".join(conflicts) or "; ".join(evidence_parts),
+                    "unavailable",
+                    set(conflicting_pids),
+                    "; ".join(unavailable_parts)
+                    or "no explicit UUID found for this process",
                 )
             continue
 
@@ -1339,8 +1375,11 @@ def collect_agent_conversations(
                 process_cwds,
                 process_keys,
                 processes_by_pid,
-                "; ".join(conflicts + unavailable_reasons),
-                "conflicting_evidence" if conflicts else "unavailable",
+                "; ".join(conflicts) or "; ".join(unavailable_reasons),
+                "unavailable",
+                set(conflicting_pids),
+                "; ".join(unavailable_reasons)
+                or "no explicit UUID found for this process",
             )
             continue
 
@@ -1354,7 +1393,6 @@ def collect_agent_conversations(
                 process_keys,
                 processes_by_pid,
                 "cannot associate one scrollback UUID with multiple tool processes",
-                "conflicting_evidence",
             )
             continue
 
