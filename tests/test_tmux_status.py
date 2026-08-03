@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -130,6 +131,32 @@ class TmuxStatusTests(unittest.TestCase):
             "500:1784999999:$1:1785000000:@2:%3:100",
             statuses[0].pane_instance_id,
         )
+
+    def test_dead_pane_does_not_reuse_pid_processes_or_collect_recovery(self):
+        pane = self.pane()
+        pane.pane_dead = True
+        pane.pane_dead_status = 0
+        collected = []
+        statuses = tmux_status.build_statuses(
+            [pane],
+            {
+                100: tmux_status.ProcessInfo(
+                    100, 1, 25.0, 2048, "S", "0:10", "/usr/local/bin/codex"
+                )
+            },
+            {},
+            80.0,
+            1024.0,
+            conversation_collector=lambda current_pane, tree: collected.append(
+                (current_pane, tree)
+            ),
+        )
+
+        self.assertEqual([], collected)
+        self.assertEqual(0, statuses[0].process_count)
+        self.assertEqual([], statuses[0].tools)
+        self.assertEqual([], statuses[0].agent_conversations)
+        self.assertIn("DEAD", statuses[0].anomalies)
 
     def test_manual_mark_precedence(self):
         pane = tmux_status.PaneInfo(
@@ -360,6 +387,42 @@ class TmuxStatusTests(unittest.TestCase):
                     "grok", unrelated_grok, {"grok": root / "sessions"}
                 )
             )
+
+    def test_reads_codex_metadata_from_the_held_descriptor(self):
+        original_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        replacement_id = "019fb21f-84c9-7692-8371-1f9aa3e75401"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rollout_dir = root / "sessions" / "2026" / "08" / "03"
+            rollout_dir.mkdir(parents=True)
+            rollout = rollout_dir / "rollout-{}.jsonl".format(original_id)
+            rollout.write_text(
+                json.dumps({"type": "session_meta", "payload": {"id": original_id}})
+                + "\n",
+                encoding="utf-8",
+            )
+            with rollout.open("r", encoding="utf-8") as held_file:
+                evidence = tmux_status.OpenProcessFile(
+                    source_path=rollout,
+                    read_path=Path("/dev/fd") / str(held_file.fileno()),
+                    inode=os.fstat(held_file.fileno()).st_ino,
+                )
+                replacement = rollout.with_suffix(".replacement")
+                replacement.write_text(
+                    json.dumps(
+                        {"type": "session_meta", "payload": {"id": replacement_id}}
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                replacement.replace(rollout)
+
+                self.assertEqual(
+                    original_id,
+                    tmux_status.session_id_from_open_file(
+                        "codex", evidence, {"codex": root / "sessions"}
+                    ),
+                )
 
     def test_collects_stable_mapping_from_open_session_file(self):
         grok_id = "019fc532-c5ba-7b90-a199-5ecd6d99bf69"

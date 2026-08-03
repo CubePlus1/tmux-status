@@ -18,7 +18,7 @@ import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple, Union
 
 VERSION = "0.3.0"
 FIELD_SEPARATOR = "\x1f"
@@ -82,6 +82,13 @@ class ProcessInfo:
     state: str
     elapsed: str
     command: str
+
+
+@dataclass(frozen=True)
+class OpenProcessFile:
+    source_path: Path
+    read_path: Path
+    inode: Optional[int]
 
 
 @dataclass
@@ -700,29 +707,40 @@ def path_is_within(path: Path, root: Path) -> bool:
 
 def session_metadata_from_open_file(
     tool: str,
-    path: Path,
+    path: Union[Path, OpenProcessFile],
     session_roots: Optional[Dict[str, Path]] = None,
     process_environment: Optional[Dict[str, str]] = None,
 ) -> Optional[Tuple[str, Optional[str]]]:
     """Read only identity metadata from a session file opened by the process."""
+    opened_file = (
+        path
+        if isinstance(path, OpenProcessFile)
+        else OpenProcessFile(path, path, None)
+    )
+    source_path = opened_file.source_path
     session_root = (session_roots or {}).get(tool) or configured_session_root(
         tool, process_environment
     )
-    if session_root is None or not path_is_within(path, session_root):
+    if session_root is None or not path_is_within(source_path, session_root):
         return None
     if tool == "grok":
-        if path.name not in SESSION_FILE_NAMES["grok"]:
+        if source_path.name not in SESSION_FILE_NAMES["grok"]:
             return None
-        session_id = validated_uuid(path.parent.name)
+        session_id = validated_uuid(source_path.parent.name)
         return (session_id, None) if session_id else None
 
     if tool != "codex":
         return None
-    if not path.name.startswith("rollout-") or path.suffix != ".jsonl":
+    if not source_path.name.startswith("rollout-") or source_path.suffix != ".jsonl":
         return None
     try:
-        with path.open("r", encoding="utf-8") as session_file:
+        with opened_file.read_path.open("r", encoding="utf-8") as session_file:
+            opened_stat = os.fstat(session_file.fileno())
+            if opened_file.inode is not None and opened_stat.st_ino != opened_file.inode:
+                return None
             first_line = session_file.readline()
+            if os.fstat(session_file.fileno()).st_ino != opened_stat.st_ino:
+                return None
         event = json.loads(first_line)
     except (OSError, ValueError):
         return None
@@ -748,7 +766,7 @@ def session_id_from_open_file(
     return metadata[0] if metadata else None
 
 
-def list_open_paths(pid: int) -> List[Path]:
+def list_open_paths(pid: int) -> List[OpenProcessFile]:
     proc_directory = Path("/proc") / str(pid) / "fd"
     if proc_directory.is_dir():
         paths = []
@@ -756,24 +774,37 @@ def list_open_paths(pid: int) -> List[Path]:
             for descriptor in proc_directory.iterdir():
                 try:
                     target = Path(os.readlink(str(descriptor)))
+                    descriptor_stat = descriptor.stat()
                 except OSError:
                     continue
                 if target.is_absolute():
-                    paths.append(target)
+                    paths.append(
+                        OpenProcessFile(target, descriptor, descriptor_stat.st_ino)
+                    )
         except OSError:
             return []
         return paths
 
     if not shutil.which("lsof"):
         return []
-    result = run_command(["lsof", "-Fn", "-p", str(pid)])
+    result = run_command(["lsof", "-Ffin", "-p", str(pid)])
     paths = []
+    descriptor_inode = None
     for line in result.stdout.splitlines():
+        if line.startswith("f"):
+            descriptor_inode = None
+            continue
+        if line.startswith("i"):
+            try:
+                descriptor_inode = int(line[1:])
+            except ValueError:
+                descriptor_inode = None
+            continue
         if not line.startswith("n/"):
             continue
         path = Path(line[1:])
         if path.is_absolute():
-            paths.append(path)
+            paths.append(OpenProcessFile(path, path, descriptor_inode))
     return paths
 
 
@@ -967,7 +998,7 @@ def append_unknown_conversations(
 def collect_agent_conversations(
     pane: PaneInfo,
     tree: List[ProcessInfo],
-    open_paths: Callable[[int], List[Path]] = list_open_paths,
+    open_paths: Callable[[int], List[Union[Path, OpenProcessFile]]] = list_open_paths,
     scrollback: Callable[[str], str] = capture_pane_scrollback,
     working_directory: Callable[[int], Optional[str]] = process_working_directory,
     arguments: Callable[[int], Optional[List[str]]] = process_arguments,
@@ -1040,7 +1071,12 @@ def collect_agent_conversations(
                 )
                 if metadata:
                     session_id, metadata_cwd = metadata
-                    file_evidence[session_id] = (str(path), metadata_cwd)
+                    source_path = (
+                        path.source_path
+                        if isinstance(path, OpenProcessFile)
+                        else path
+                    )
+                    file_evidence[session_id] = (str(source_path), metadata_cwd)
             ending_arguments = arguments(process.pid)
             ending_instance_key = instance_key(process.pid)
             process_still_matches_tool = (
@@ -1382,7 +1418,7 @@ def build_statuses(
 ) -> List[PaneStatus]:
     statuses = []
     for pane in panes:
-        tree = descendants(pane.pane_pid, processes)
+        tree = [] if pane.pane_dead else descendants(pane.pane_pid, processes)
         cpu = sum(process.cpu_percent for process in tree)
         memory_mb = sum(process.rss_kb for process in tree) / 1024.0
         tools = detect_tools(tree)
@@ -1404,7 +1440,9 @@ def build_statuses(
             source = "auto"
             note = ""
         agent_conversations = (
-            conversation_collector(pane, tree) if conversation_collector else []
+            conversation_collector(pane, tree)
+            if conversation_collector and not pane.pane_dead
+            else []
         )
 
         statuses.append(

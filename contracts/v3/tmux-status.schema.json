@@ -70,6 +70,22 @@
       },
       "then": { "properties": { "pre_restart": { "const": true } } },
       "else": { "properties": { "pre_restart": { "const": false } } }
+    },
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "server_instance_id": { "$ref": "#/$defs/serverInstanceId" },
+            "panes": { "minItems": 1 }
+          }
+        },
+        {
+          "properties": {
+            "server_instance_id": { "type": "null" },
+            "panes": { "maxItems": 0 }
+          }
+        }
+      ]
     }
   ],
   "$defs": {
