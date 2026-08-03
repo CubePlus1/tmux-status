@@ -58,6 +58,7 @@ jobs:
             '.panes[0].agent_conversations[0].process_instances = {"2147483648":"2147483648:oversized"} | .recovery[0].process_instances = {"2147483648":"2147483648:oversized"}' \
             '.panes[0].agent_conversations[0].process_instances = {"101":"202:wrong-process"}' \
             '.panes[0].agent_conversations[0].process_instances = {"101":"101:"}' \
+            '.panes[0].agent_conversations += [.panes[0].agent_conversations[0] | .process_instances = {"101":"101:different"}] | .recovery += [.recovery[0] | .process_instances = {"101":"101:different"}] | .confirmed_conversation_count = 2' \
             '.panes[0].agent_conversations += [.panes[0].agent_conversations[0]] | .recovery += [.recovery[0]] | .confirmed_conversation_count = 2' \
             '.panes[0].agent_conversations[0].working_directory = ""'; do
             if jq "$mutation" fixtures/confirmed.json | \

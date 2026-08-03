@@ -12,6 +12,7 @@ import shlex
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -970,7 +971,10 @@ def process_agent_home_environment(pid: int) -> Dict[str, str]:
     try:
         entries = environ_path.read_bytes().split(b"\0")
     except OSError:
-        return {}
+        if sys.platform != "darwin":
+            return {}
+        raw_procargs = darwin_process_arguments_and_environment(pid)
+        entries = parse_darwin_environment(raw_procargs) if raw_procargs else []
     selected = {}
     for entry in entries:
         for key in ("CODEX_HOME", "GROK_HOME"):
@@ -978,6 +982,67 @@ def process_agent_home_environment(pid: int) -> Dict[str, str]:
             if entry.startswith(prefix):
                 selected[key] = os.fsdecode(entry[len(prefix) :])
     return selected
+
+
+def darwin_process_arguments_and_environment(pid: int) -> Optional[bytes]:
+    """Read KERN_PROCARGS2 for one process; callers must discard unrelated values."""
+    library_path = ctypes.util.find_library("c")
+    if not library_path:
+        return None
+    try:
+        argument_max = max(int(os.sysconf("SC_ARG_MAX")), 4096)
+        buffer = ctypes.create_string_buffer(argument_max)
+        buffer_size = ctypes.c_size_t(argument_max)
+        mib = (ctypes.c_int * 3)(1, 49, pid)  # CTL_KERN, KERN_PROCARGS2
+        libc = ctypes.CDLL(library_path, use_errno=True)
+        result = libc.sysctl(
+            mib,
+            len(mib),
+            ctypes.byref(buffer),
+            ctypes.byref(buffer_size),
+            None,
+            0,
+        )
+    except (AttributeError, OSError, ValueError):
+        return None
+    if result != 0 or buffer_size.value < struct.calcsize("=i"):
+        return None
+    return bytes(buffer.raw[: buffer_size.value])
+
+
+def parse_darwin_environment(raw_procargs: bytes) -> List[bytes]:
+    """Extract NUL-delimited environment entries from KERN_PROCARGS2 output."""
+    integer_size = struct.calcsize("=i")
+    if len(raw_procargs) < integer_size:
+        return []
+    argument_count = struct.unpack_from("=i", raw_procargs)[0]
+    if argument_count < 0:
+        return []
+    offset = integer_size
+    executable_end = raw_procargs.find(b"\0", offset)
+    if executable_end < 0:
+        return []
+    offset = executable_end + 1
+    while offset < len(raw_procargs) and raw_procargs[offset] == 0:
+        offset += 1
+    for _ in range(argument_count):
+        argument_end = raw_procargs.find(b"\0", offset)
+        if argument_end < 0:
+            return []
+        offset = argument_end + 1
+    while offset < len(raw_procargs) and raw_procargs[offset] == 0:
+        offset += 1
+
+    entries = []
+    while offset < len(raw_procargs):
+        entry_end = raw_procargs.find(b"\0", offset)
+        if entry_end < 0:
+            entry_end = len(raw_procargs)
+        entry = raw_procargs[offset:entry_end]
+        if entry:
+            entries.append(entry)
+        offset = entry_end + 1
+    return entries
 
 
 def linux_process_start_time(stat_text: str) -> Optional[str]:
@@ -1868,7 +1933,13 @@ def collect_statuses(
     # A second tmux snapshot after the process snapshot proves that recovery
     # evidence still belongs to the listed pane/root rather than a reused PID.
     if include_conversations and panes:
+        first_pane_instances = {pane_instance_id(pane) for pane in panes}
         panes = collect_panes()
+        stable_pane_instances = first_pane_instances.intersection(
+            pane_instance_id(pane) for pane in panes
+        )
+    else:
+        stable_pane_instances = None
     return build_statuses(
         panes,
         processes,
@@ -1876,7 +1947,13 @@ def collect_statuses(
         args.cpu_threshold,
         args.memory_threshold,
         conversation_collector=(
-            collect_agent_conversations if include_conversations else None
+            (
+                lambda pane, tree: collect_agent_conversations(pane, tree)
+                if pane_instance_id(pane) in stable_pane_instances
+                else []
+            )
+            if stable_pane_instances is not None
+            else None
         ),
     )
 

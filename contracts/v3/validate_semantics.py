@@ -32,6 +32,7 @@ def expected_resume(tool, conversation_id, cwd):
 def validate(payload):
     errors = []
     seen_process_instances = set()
+    process_instance_by_pid = {}
     panes = payload.get("panes", [])
     recovery = payload.get("recovery", [])
     producer = payload.get("producer", {})
@@ -108,6 +109,13 @@ def validate(payload):
                     )
                 if not instance_key.startswith(pid + ":") or len(instance_key) == len(pid) + 1:
                     errors.append("process instance key does not match its PID")
+                previous_instance_key = process_instance_by_pid.get(pid)
+                if (
+                    previous_instance_key is not None
+                    and previous_instance_key != instance_key
+                ):
+                    errors.append("PID maps to multiple process instance keys")
+                process_instance_by_pid[pid] = instance_key
                 process_instance = (pid, instance_key)
                 if process_instance in seen_process_instances:
                     errors.append("process instance is reused across conversations")

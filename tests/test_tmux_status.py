@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import struct
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -606,6 +607,27 @@ class TmuxStatusTests(unittest.TestCase):
 
         self.assertEqual("confirmed", conversations[0].conversation_id_status)
         self.assertEqual(codex_id, conversations[0].conversation_id)
+
+    def test_reads_agent_home_from_darwin_process_environment(self):
+        raw_procargs = (
+            struct.pack("=i", 1)
+            + b"/usr/local/bin/codex\0\0"
+            + b"codex\0"
+            + b"UNRELATED=discard-me\0"
+            + b"CODEX_HOME=/tmp/Custom Codex\0"
+        )
+        with patch.object(tmux_status.sys, "platform", "darwin"):
+            with patch.object(
+                tmux_status.Path, "read_bytes", side_effect=OSError
+            ):
+                with patch.object(
+                    tmux_status,
+                    "darwin_process_arguments_and_environment",
+                    return_value=raw_procargs,
+                ):
+                    environment = tmux_status.process_agent_home_environment(101)
+
+        self.assertEqual({"CODEX_HOME": "/tmp/Custom Codex"}, environment)
 
     def test_open_session_file_has_priority_over_wrapper_resume_argument(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
@@ -1448,6 +1470,34 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual(2, collect_panes.call_count)
         collect_conversations.assert_not_called()
         self.assertTrue(statuses[0].dead)
+        self.assertEqual([], statuses[0].agent_conversations)
+
+    def test_rejects_old_process_tree_for_a_replacement_pane(self):
+        old_pane = self.pane()
+        replacement_pane = self.pane()
+        replacement_pane.pane_id = "%4"
+        replacement = tmux_status.ProcessInfo(
+            100, 1, 0.0, 1, "S", "0:01", "/usr/local/bin/codex"
+        )
+        args = tmux_status.build_parser().parse_args(["status", "--json"])
+        with patch.object(
+            tmux_status,
+            "collect_panes",
+            side_effect=[[old_pane], [replacement_pane]],
+        ):
+            with patch.object(
+                tmux_status, "collect_processes", return_value={100: replacement}
+            ):
+                with patch.object(
+                    tmux_status, "collect_agent_conversations"
+                ) as collect_conversations:
+                    with patch.object(tmux_status, "load_marks", return_value={}):
+                        statuses = tmux_status.collect_statuses(
+                            args, include_conversations=True
+                        )
+
+        collect_conversations.assert_not_called()
+        self.assertEqual("%4", statuses[0].pane_id)
         self.assertEqual([], statuses[0].agent_conversations)
 
     def test_human_status_and_watch_skip_conversation_collection(self):
