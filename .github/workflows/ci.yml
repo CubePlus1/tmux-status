@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tmux-status
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out pinned OpenAI validators
+        uses: actions/checkout@v5
+        with:
+          repository: openai/skills
+          ref: 49f948faa9258a0c61caceaf225e179651397431
+          path: .ci/openai-skills
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Validate canonical v3 contract
+        working-directory: contracts/v3
+        run: |
+          shasum -a 256 -c SHA256SUMS
+          uvx --from check-jsonschema==0.33.3 check-jsonschema \
+            --schemafile tmux-status.schema.json fixtures/*.json
+          if uvx --from check-jsonschema==0.33.3 check-jsonschema \
+            --schemafile tmux-status.schema.json fixtures-invalid/*.json; then
+            echo "invalid tmux-status fixture unexpectedly passed" >&2
+            exit 1
+          fi
+
+      - name: Validate Skill
+        run: |
+          uv run --with pyyaml==6.0.2 python \
+            .ci/openai-skills/skills/.system/skill-creator/scripts/quick_validate.py \
+            skills/tmux-status
+
+      - name: Smoke-test live output shape
+        run: |
+          python3 skills/tmux-status/scripts/tmux_status.py --version
+          python3 -m py_compile skills/tmux-status/scripts/tmux_status.py

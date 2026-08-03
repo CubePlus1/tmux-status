@@ -9,16 +9,18 @@ import re
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-VERSION = "0.1.0"
+VERSION = "0.3.0"
 FIELD_SEPARATOR = "\x1f"
 TMUX_ESCAPED_FIELD_SEPARATOR = r"\037"
 DEFAULT_CPU_THRESHOLD = 80.0
@@ -36,6 +38,18 @@ TOOL_NAMES = {
     "codex": ("codex", "codex-cli"),
     "grok": ("grok", "grok-cli"),
 }
+SESSION_FILE_NAMES = {
+    "grok": {
+        "events.jsonl",
+        "updates.jsonl",
+        "chat_history.jsonl",
+        "summary.json",
+        "signals.json",
+    }
+}
+UUID_PATTERN = re.compile(
+    r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"
+)
 RUNTIME_NAMES = {
     "bun",
     "deno",
@@ -85,10 +99,29 @@ class PaneInfo:
     pane_dead: bool
     pane_dead_status: Optional[int]
     current_path: str
+    session_id: str = ""
+    session_created: int = 0
+    window_id: str = ""
+    server_pid: int = 0
+    server_started: int = 0
 
     @property
     def locator(self) -> str:
         return "{}:{}.{}".format(self.session, self.window_index, self.pane_index)
+
+
+@dataclass
+class AgentConversation:
+    tool: str
+    conversation_id: Optional[str]
+    conversation_id_status: str
+    conversation_id_kind: str
+    identity_source: str
+    source_path: Optional[str]
+    process_pids: List[int]
+    stable_mapping_key: Optional[str]
+    resume_command: Optional[str]
+    evidence: str
 
 
 @dataclass
@@ -111,6 +144,20 @@ class PaneStatus:
     activity_source: str
     note: str
     anomalies: List[str]
+    session_id: str
+    session_created: int
+    window_id: str
+    server_instance_id: str
+    tmux_target: str
+    tmux_session_name: str
+    tmux_window_index: int
+    tmux_window_name: str
+    tmux_pane_index: int
+    pane_id: str
+    pane_pid: int
+    working_directory: str
+    pane_instance_id: str
+    agent_conversations: List[AgentConversation]
 
 
 def config_path() -> Path:
@@ -149,6 +196,11 @@ PANE_FIELDS = (
     "#{pane_dead}",
     "#{pane_dead_status}",
     "#{pane_current_path}",
+    "#{session_id}",
+    "#{session_created}",
+    "#{window_id}",
+    "#{pid}",
+    "#{start_time}",
 )
 
 
@@ -179,6 +231,11 @@ def parse_panes_output(output: str) -> List[PaneInfo]:
                 pane_dead=values[10] == "1",
                 pane_dead_status=dead_status,
                 current_path=values[12],
+                session_id=values[13],
+                session_created=int(values[14]),
+                window_id=values[15],
+                server_pid=int(values[16]),
+                server_started=int(values[17]),
             )
         )
     return panes
@@ -302,16 +359,381 @@ def executable_names(command: str) -> List[str]:
     return names
 
 
+def tool_for_process(process: ProcessInfo) -> Optional[str]:
+    for name in executable_names(process.command):
+        for tool, aliases in TOOL_NAMES.items():
+            if name in aliases:
+                return tool
+        if re.fullmatch(r"codex(?:-cli)?", name):
+            return "codex"
+        if re.fullmatch(
+            r"grok(?:-cli)?(?:-\d+(?:\.\d+)+(?:-[a-z0-9._-]+)*)?", name
+        ):
+            return "grok"
+    return None
+
+
 def detect_tools(processes: Iterable[ProcessInfo]) -> List[str]:
     found: Set[str] = set()
     for process in processes:
         if "Z" in process.state.upper():
             continue
-        for name in executable_names(process.command):
-            for tool, aliases in TOOL_NAMES.items():
-                if name in aliases:
-                    found.add(tool)
+        tool = tool_for_process(process)
+        if tool:
+            found.add(tool)
     return sorted(found)
+
+
+def validated_uuid(value: str) -> Optional[str]:
+    value = value.strip().strip("'\"`.,;:()[]{}<>")
+    if not UUID_PATTERN.fullmatch(value):
+        return None
+    try:
+        return str(uuid.UUID(value))
+    except ValueError:
+        return None
+
+
+def command_tokens(command: str) -> List[str]:
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return re.findall(r"[^\s\"']+", command)
+
+
+def session_id_from_command(tool: str, command: str) -> Optional[Tuple[str, str]]:
+    """Return an explicit UUID and its CLI evidence type, never a title or PID."""
+    tokens = command_tokens(command)
+    if not tokens:
+        return None
+
+    if tool == "grok":
+        for index, token in enumerate(tokens):
+            for option in ("--resume=", "-r=", "--session-id=", "-s="):
+                if token.startswith(option):
+                    session_id = validated_uuid(token[len(option) :])
+                    if session_id:
+                        source = (
+                            "cli_resume_argument"
+                            if "resume" in option or option.startswith("-r")
+                            else "cli_session_id_argument"
+                        )
+                        return session_id, source
+            if token in ("--resume", "-r", "--session-id", "-s"):
+                if index + 1 < len(tokens):
+                    session_id = validated_uuid(tokens[index + 1])
+                    if session_id:
+                        source = (
+                            "cli_resume_argument"
+                            if token in ("--resume", "-r")
+                            else "cli_session_id_argument"
+                        )
+                        return session_id, source
+        return None
+
+    if tool != "codex":
+        return None
+    try:
+        resume_index = tokens.index("resume")
+    except ValueError:
+        return None
+    value_options = {
+        "-a",
+        "--ask-for-approval",
+        "-c",
+        "--config",
+        "-C",
+        "--cd",
+        "-m",
+        "--model",
+        "--remote",
+        "-s",
+        "--sandbox",
+    }
+    index = resume_index + 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token in ("--last", "--all"):
+            return None
+        if token == "--":
+            return None
+        if token in value_options:
+            index += 2
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        session_id = validated_uuid(token)
+        return (session_id, "cli_resume_argument") if session_id else None
+    return None
+
+
+def session_id_from_open_file(tool: str, path: Path) -> Optional[str]:
+    """Read only identity metadata from a session file opened by the process."""
+    if tool == "grok":
+        if "sessions" not in path.parts or path.name not in SESSION_FILE_NAMES["grok"]:
+            return None
+        return validated_uuid(path.parent.name)
+
+    if tool != "codex" or "sessions" not in path.parts:
+        return None
+    if not path.name.startswith("rollout-") or path.suffix != ".jsonl":
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as session_file:
+            first_line = session_file.readline()
+        event = json.loads(first_line)
+    except (OSError, ValueError):
+        return None
+    if event.get("type") != "session_meta" or not isinstance(event.get("payload"), dict):
+        return None
+    payload = event["payload"]
+    for key in ("session_id", "id"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            session_id = validated_uuid(value)
+            if session_id:
+                return session_id
+    return None
+
+
+def list_open_paths(pid: int) -> List[Path]:
+    proc_directory = Path("/proc") / str(pid) / "fd"
+    if proc_directory.is_dir():
+        paths = []
+        try:
+            for descriptor in proc_directory.iterdir():
+                try:
+                    target = Path(os.readlink(str(descriptor)))
+                except OSError:
+                    continue
+                if target.is_absolute():
+                    paths.append(target)
+        except OSError:
+            return []
+        return paths
+
+    if not shutil.which("lsof"):
+        return []
+    result = run_command(["lsof", "-Fn", "-p", str(pid)])
+    paths = []
+    for line in result.stdout.splitlines():
+        if not line.startswith("n/"):
+            continue
+        path = Path(line[1:])
+        if path.is_absolute():
+            paths.append(path)
+    return paths
+
+
+def capture_pane_scrollback(pane_id: str) -> str:
+    result = run_command(
+        ["tmux", "capture-pane", "-p", "-J", "-t", pane_id, "-S", "-300"]
+    )
+    return result.stdout if result.returncode == 0 else ""
+
+
+def session_ids_from_scrollback(tool: str, scrollback: str) -> List[str]:
+    found: Set[str] = set()
+    for raw_line in scrollback.splitlines():
+        line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw_line)
+        match = re.search(r"\b{}\b".format(re.escape(tool)), line, re.IGNORECASE)
+        if not match:
+            continue
+        parsed = session_id_from_command(tool, line[match.start() :])
+        if parsed:
+            found.add(parsed[0])
+    return sorted(found)
+
+
+def resume_command(tool: str, conversation_id: str, cwd: str) -> str:
+    if tool == "codex":
+        return "codex resume -C {} {}".format(
+            shlex.quote(cwd), shlex.quote(conversation_id)
+        )
+    return "grok --cwd {} --resume {}".format(
+        shlex.quote(cwd), shlex.quote(conversation_id)
+    )
+
+
+def conversation_kind(tool: str) -> str:
+    return "codex_thread_id" if tool == "codex" else "grok_session_id"
+
+
+def confirmed_conversation(
+    tool: str,
+    conversation_id: str,
+    source: str,
+    process_pids: List[int],
+    cwd: str,
+    source_path: Optional[str] = None,
+) -> AgentConversation:
+    return AgentConversation(
+        tool=tool,
+        conversation_id=conversation_id,
+        conversation_id_status="confirmed",
+        conversation_id_kind=conversation_kind(tool),
+        identity_source=source,
+        source_path=source_path,
+        process_pids=sorted(process_pids),
+        stable_mapping_key="{}:{}".format(tool, conversation_id),
+        resume_command=resume_command(tool, conversation_id, cwd),
+        evidence="explicit UUID from {}".format(source),
+    )
+
+
+def unknown_conversation(
+    tool: str,
+    process_pids: List[int],
+    evidence: str,
+    identity_source: str = "unavailable",
+) -> AgentConversation:
+    return AgentConversation(
+        tool=tool,
+        conversation_id=None,
+        conversation_id_status="unknown",
+        conversation_id_kind=conversation_kind(tool),
+        identity_source=identity_source,
+        source_path=None,
+        process_pids=sorted(process_pids),
+        stable_mapping_key=None,
+        resume_command=None,
+        evidence=evidence,
+    )
+
+
+def collect_agent_conversations(
+    pane: PaneInfo,
+    tree: List[ProcessInfo],
+    open_paths: Callable[[int], List[Path]] = list_open_paths,
+    scrollback: Callable[[str], str] = capture_pane_scrollback,
+) -> List[AgentConversation]:
+    tool_processes: Dict[str, List[ProcessInfo]] = {}
+    for process in tree:
+        if "Z" in process.state.upper():
+            continue
+        tool = tool_for_process(process)
+        if tool:
+            tool_processes.setdefault(tool, []).append(process)
+
+    conversations = []
+    pane_scrollback: Optional[str] = None
+    for tool, matching_processes in sorted(tool_processes.items()):
+        confirmed: Dict[str, dict] = {}
+        conflicts = []
+        for process in matching_processes:
+            file_evidence: Dict[str, str] = {}
+            for path in open_paths(process.pid):
+                session_id = session_id_from_open_file(tool, path)
+                if session_id:
+                    file_evidence[session_id] = str(path)
+            if len(file_evidence) == 1:
+                session_id, source_path = next(iter(file_evidence.items()))
+                entry = confirmed.setdefault(
+                    session_id,
+                    {"pids": [], "source": "open_session_file", "path": source_path},
+                )
+                entry["pids"].append(process.pid)
+                entry["source"] = "open_session_file"
+                entry["path"] = source_path
+                continue
+            if len(file_evidence) > 1:
+                conflicts.append(
+                    "PID {} opened multiple {} session files".format(process.pid, tool)
+                )
+                continue
+
+            command_evidence = session_id_from_command(tool, process.command)
+            if command_evidence:
+                session_id, source = command_evidence
+                entry = confirmed.setdefault(
+                    session_id, {"pids": [], "source": source, "path": None}
+                )
+                entry["pids"].append(process.pid)
+
+        if confirmed:
+            for session_id, evidence in sorted(confirmed.items()):
+                conversations.append(
+                    confirmed_conversation(
+                        tool,
+                        session_id,
+                        evidence["source"],
+                        evidence["pids"],
+                        pane.current_path,
+                        evidence["path"],
+                    )
+                )
+            if conflicts:
+                conversations.append(
+                    unknown_conversation(
+                        tool,
+                        [process.pid for process in matching_processes],
+                        "; ".join(conflicts),
+                        "conflicting_evidence",
+                    )
+                )
+            continue
+
+        if conflicts:
+            conversations.append(
+                unknown_conversation(
+                    tool,
+                    [process.pid for process in matching_processes],
+                    "; ".join(conflicts),
+                    "conflicting_evidence",
+                )
+            )
+            continue
+
+        if pane_scrollback is None:
+            pane_scrollback = scrollback(pane.pane_id)
+        scrollback_ids = session_ids_from_scrollback(tool, pane_scrollback)
+        process_pids = [process.pid for process in matching_processes]
+        if len(scrollback_ids) == 1:
+            conversations.append(
+                confirmed_conversation(
+                    tool,
+                    scrollback_ids[0],
+                    "tmux_scrollback_resume_command",
+                    process_pids,
+                    pane.current_path,
+                )
+            )
+        elif len(scrollback_ids) > 1:
+            conversations.append(
+                unknown_conversation(
+                    tool,
+                    process_pids,
+                    "multiple distinct resume UUIDs found in tmux scrollback",
+                    "conflicting_evidence",
+                )
+            )
+        else:
+            conversations.append(
+                unknown_conversation(
+                    tool,
+                    process_pids,
+                    "no explicit UUID found in open session files, CLI arguments, or tmux scrollback",
+                )
+            )
+    return conversations
+
+
+def pane_instance_id(pane: PaneInfo) -> str:
+    return ":".join(
+        (
+            server_instance_id(pane),
+            pane.session_id,
+            str(pane.session_created),
+            pane.window_id,
+            pane.pane_id,
+            str(pane.pane_pid),
+        )
+    )
+
+
+def server_instance_id(pane: PaneInfo) -> str:
+    return "{}:{}".format(pane.server_pid, pane.server_started)
 
 
 def load_marks(path: Optional[Path] = None) -> Dict[str, dict]:
@@ -394,6 +816,9 @@ def build_statuses(
     marks: Dict[str, dict],
     cpu_threshold: float,
     memory_threshold_mb: float,
+    conversation_collector: Optional[
+        Callable[[PaneInfo, List[ProcessInfo]], List[AgentConversation]]
+    ] = None,
 ) -> List[PaneStatus]:
     statuses = []
     for pane in panes:
@@ -418,6 +843,9 @@ def build_statuses(
             activity = automatic_activity(pane, tree, tools)
             source = "auto"
             note = ""
+        agent_conversations = (
+            conversation_collector(pane, tree) if conversation_collector else []
+        )
 
         statuses.append(
             PaneStatus(
@@ -439,6 +867,20 @@ def build_statuses(
                 activity_source=source,
                 note=note,
                 anomalies=anomalies,
+                session_id=pane.session_id,
+                session_created=pane.session_created,
+                window_id=pane.window_id,
+                server_instance_id=server_instance_id(pane),
+                tmux_target=pane.locator,
+                tmux_session_name=pane.session,
+                tmux_window_index=pane.window_index,
+                tmux_window_name=pane.window_name,
+                tmux_pane_index=pane.pane_index,
+                pane_id=pane.pane_id,
+                pane_pid=pane.pane_pid,
+                working_directory=pane.current_path,
+                pane_instance_id=pane_instance_id(pane),
+                agent_conversations=agent_conversations,
             )
         )
     return statuses
@@ -541,20 +983,224 @@ def collect_statuses(args: argparse.Namespace) -> List[PaneStatus]:
         load_marks(),
         args.cpu_threshold,
         args.memory_threshold,
+        conversation_collector=collect_agent_conversations,
     )
 
 
-def status_payload(statuses: List[PaneStatus], args: argparse.Namespace) -> dict:
+def recovery_entries(statuses: List[PaneStatus]) -> List[dict]:
+    entries = []
+    for status in statuses:
+        for conversation in status.agent_conversations:
+            entries.append(
+                {
+                    "tool": conversation.tool,
+                    "conversation_id": conversation.conversation_id,
+                    "conversation_id_status": conversation.conversation_id_status,
+                    "conversation_id_kind": conversation.conversation_id_kind,
+                    "identity_source": conversation.identity_source,
+                    "source_path": conversation.source_path,
+                    "stable_mapping_key": conversation.stable_mapping_key,
+                    "tmux_target": status.target,
+                    "tmux_session_name": status.tmux_session_name,
+                    "pane_id": status.pane_id,
+                    "pane_pid": status.pane_pid,
+                    "process_pids": conversation.process_pids,
+                    "working_directory": status.working_directory,
+                    "resume_command": conversation.resume_command,
+                }
+            )
+    return entries
+
+
+def status_payload(
+    statuses: List[PaneStatus], args: argparse.Namespace, report_type: str = "status"
+) -> dict:
+    recovery = recovery_entries(statuses)
+    producer_server_id = statuses[0].server_instance_id if statuses else None
+    if statuses and any(
+        status.server_instance_id != producer_server_id for status in statuses
+    ):
+        raise TmuxStatusError("tmux panes reported multiple server instances")
     return {
+        "schema_version": 3,
+        "tool_version": VERSION,
+        "producer": {"name": "tmux-status", "version": VERSION},
+        "server_instance_id": producer_server_id,
+        "report_type": report_type,
+        "pre_restart": report_type == "recovery",
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "host": socket.gethostname(),
         "thresholds": {
             "cpu_percent": args.cpu_threshold,
             "memory_mb": args.memory_threshold,
         },
         "pane_count": len(statuses),
         "anomaly_count": sum(bool(status.anomalies) for status in statuses),
+        "confirmed_conversation_count": sum(
+            entry["conversation_id_status"] == "confirmed" for entry in recovery
+        ),
+        "unknown_conversation_count": sum(
+            entry["conversation_id_status"] == "unknown" for entry in recovery
+        ),
+        "recovery": recovery,
         "panes": [asdict(status) for status in statuses],
     }
+
+
+def markdown_code(value: object) -> str:
+    return "`{}`".format(str(value).replace("`", "\\`"))
+
+
+def render_markdown(payload: dict) -> str:
+    report_type = payload["report_type"]
+    title = (
+        "tmux-status pre-restart recovery report"
+        if report_type == "recovery"
+        else "tmux-status snapshot"
+    )
+    lines = [
+        "# {}".format(title),
+        "",
+        "- Generated: {}".format(markdown_code(payload["generated_at"])),
+        "- Host: {}".format(markdown_code(payload["host"])),
+        "- Panes: {}".format(payload["pane_count"]),
+        "- Anomalies: {}".format(payload["anomaly_count"]),
+        "- Confirmed conversations: {}".format(
+            payload["confirmed_conversation_count"]
+        ),
+        "- Unknown conversations: {}".format(payload["unknown_conversation_count"]),
+        "",
+    ]
+    if not payload["panes"]:
+        lines.extend(["No tmux panes were visible.", ""])
+    for pane in payload["panes"]:
+        lines.extend(
+            [
+                "## {} ({})".format(
+                    pane["target"].replace("#", "\\#"),
+                    markdown_code(pane["pane_id"]),
+                ),
+                "",
+                "- tmux session name: {}".format(
+                    markdown_code(pane["tmux_session_name"])
+                ),
+                "- tmux window/pane: {}.{}".format(
+                    pane["tmux_window_index"], pane["tmux_pane_index"]
+                ),
+                "- pane ID / pane PID: {} / {}".format(
+                    markdown_code(pane["pane_id"]), pane["pane_pid"]
+                ),
+                "- pane instance ID: {}".format(
+                    markdown_code(pane["pane_instance_id"])
+                ),
+                "- working directory: {}".format(
+                    markdown_code(pane["working_directory"])
+                ),
+                "- resources: CPU {:.1f}%, memory {:.1f} MB".format(
+                    pane["cpu_percent"], pane["memory_mb"]
+                ),
+                "- activity: {} ({})".format(
+                    markdown_code(pane["activity"]),
+                    markdown_code(pane["activity_source"]),
+                ),
+                "- anomalies: {}".format(
+                    ", ".join(pane["anomalies"]) if pane["anomalies"] else "none"
+                ),
+                "",
+                "### Agent conversation mapping",
+                "",
+            ]
+        )
+        conversations = pane["agent_conversations"]
+        if not conversations:
+            lines.extend(["No Codex or Grok process was detected in this pane.", ""])
+            continue
+        for conversation in conversations:
+            conversation_id = conversation["conversation_id"] or "unknown"
+            lines.extend(
+                [
+                    "- tool: {}".format(markdown_code(conversation["tool"])),
+                    "  - ID kind: {}".format(
+                        markdown_code(conversation["conversation_id_kind"])
+                    ),
+                    "  - conversation/thread ID: {}".format(
+                        markdown_code(conversation_id)
+                    ),
+                    "  - ID status: {}".format(
+                        markdown_code(conversation["conversation_id_status"])
+                    ),
+                    "  - agent PID(s): {}".format(
+                        ", ".join(str(pid) for pid in conversation["process_pids"])
+                    ),
+                    "  - identity source: {}".format(
+                        markdown_code(conversation["identity_source"])
+                    ),
+                    "  - source path: {}".format(
+                        markdown_code(conversation["source_path"] or "unknown")
+                    ),
+                    "  - stable mapping key: {}".format(
+                        markdown_code(conversation["stable_mapping_key"] or "unknown")
+                    ),
+                    "  - evidence: {}".format(conversation["evidence"]),
+                    "  - resume command: {}".format(
+                        markdown_code(conversation["resume_command"] or "unknown")
+                    ),
+                ]
+            )
+        lines.append("")
+
+    commands = [
+        entry["resume_command"]
+        for entry in payload["recovery"]
+        if entry["resume_command"]
+    ]
+    lines.extend(["## Recovery commands", ""])
+    if commands:
+        lines.extend(["```sh", *dict.fromkeys(commands), "```", ""])
+    else:
+        lines.extend(
+            [
+                "No verified resume command is available. Resolve every `unknown` ID manually before shutdown.",
+                "",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def save_report(text: str, output: str) -> None:
+    if output == "-":
+        print(text)
+        return
+    path = Path(output).expanduser()
+    temporary_name = ""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle, temporary_name = tempfile.mkstemp(
+            prefix=".tmux-status-", suffix=".tmp", dir=str(path.parent)
+        )
+        with os.fdopen(handle, "w", encoding="utf-8") as temporary:
+            temporary.write(text)
+            if not text.endswith("\n"):
+                temporary.write("\n")
+        os.replace(temporary_name, path)
+    except OSError as exc:
+        raise TmuxStatusError("cannot write report {}: {}".format(path, exc))
+    finally:
+        if temporary_name and os.path.exists(temporary_name):
+            os.unlink(temporary_name)
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    statuses = collect_statuses(args)
+    payload = status_payload(statuses, args, report_type=args.report_type)
+    if args.format == "json":
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+    else:
+        text = render_markdown(payload)
+    save_report(text, args.output)
+    if args.output != "-":
+        print("Wrote {} {} to {}".format(args.report_type, args.format, args.output))
+    return 0
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -635,6 +1281,14 @@ def cmd_doctor(_args: argparse.Namespace) -> int:
         version = result.stdout.strip() or result.stderr.strip()
         if version:
             print("[info] {}".format(version))
+    if Path("/proc").is_dir():
+        print("[ok] process file evidence: /proc")
+    elif shutil.which("lsof"):
+        print("[ok] process file evidence: {}".format(shutil.which("lsof")))
+    else:
+        print(
+            "[info] lsof unavailable; conversation IDs can only use CLI arguments or scrollback"
+        )
     print("[info] marks: {}".format(config_path()))
     try:
         panes = collect_panes() if shutil.which("tmux") else []
@@ -687,6 +1341,25 @@ def add_threshold_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-color", action="store_true", help="disable ANSI colors")
 
 
+def add_report_options(
+    parser: argparse.ArgumentParser, report_type: str, default_format: str
+) -> None:
+    add_threshold_options(parser)
+    parser.add_argument(
+        "--format",
+        choices=("json", "markdown"),
+        default=default_format,
+        help="report format (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--output",
+        default="-",
+        metavar="PATH",
+        help="write atomically to PATH; '-' prints to stdout (default: '-')",
+    )
+    parser.set_defaults(handler=cmd_report, report_type=report_type)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tmux-status",
@@ -704,6 +1377,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="exit 2 when any pane exceeds a threshold or is dead",
     )
     status.set_defaults(handler=cmd_status)
+
+    snapshot = subparsers.add_parser(
+        "snapshot", help="write a JSON or Markdown snapshot with conversation mappings"
+    )
+    add_report_options(snapshot, "snapshot", "json")
+
+    recovery = subparsers.add_parser(
+        "recovery", help="write a pre-restart report with verified resume commands"
+    )
+    add_report_options(recovery, "recovery", "markdown")
 
     watch = subparsers.add_parser("watch", help="continuously refresh status")
     add_threshold_options(watch)

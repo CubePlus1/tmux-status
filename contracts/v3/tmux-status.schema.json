@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/CubePlus1/tmux-status/blob/main/contracts/v3/tmux-status.schema.json",
+  "title": "tmux-status schema v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "tool_version",
+    "producer",
+    "server_instance_id",
+    "report_type",
+    "pre_restart",
+    "generated_at",
+    "host",
+    "thresholds",
+    "pane_count",
+    "anomaly_count",
+    "confirmed_conversation_count",
+    "unknown_conversation_count",
+    "recovery",
+    "panes"
+  ],
+  "properties": {
+    "schema_version": { "const": 3 },
+    "tool_version": { "$ref": "#/$defs/version" },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "tmux-status" },
+        "version": { "$ref": "#/$defs/version" }
+      }
+    },
+    "server_instance_id": {
+      "oneOf": [{ "$ref": "#/$defs/serverInstanceId" }, { "type": "null" }]
+    },
+    "report_type": { "enum": ["status", "snapshot", "recovery"] },
+    "pre_restart": { "type": "boolean" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "host": { "type": "string", "minLength": 1 },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu_percent", "memory_mb"],
+      "properties": {
+        "cpu_percent": { "type": "number", "minimum": 0 },
+        "memory_mb": { "type": "number", "minimum": 0 }
+      }
+    },
+    "pane_count": { "type": "integer", "minimum": 0 },
+    "anomaly_count": { "type": "integer", "minimum": 0 },
+    "confirmed_conversation_count": { "type": "integer", "minimum": 0 },
+    "unknown_conversation_count": { "type": "integer", "minimum": 0 },
+    "recovery": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/recoveryEntry" }
+    },
+    "panes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/pane" }
+    }
+  },
+  "$defs": {
+    "version": {
+      "type": "string",
+      "pattern": "^0\\.3\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"
+    },
+    "serverInstanceId": {
+      "type": "string",
+      "pattern": "^[0-9]+:[0-9]+$"
+    },
+    "processPids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "integer", "minimum": 1 }
+    },
+    "conversationCommon": {
+      "type": "object",
+      "required": [
+        "tool",
+        "conversation_id",
+        "conversation_id_status",
+        "conversation_id_kind",
+        "identity_source",
+        "source_path",
+        "process_pids",
+        "stable_mapping_key",
+        "resume_command",
+        "evidence"
+      ],
+      "properties": {
+        "tool": { "enum": ["codex", "grok"] },
+        "conversation_id": { "type": ["string", "null"], "format": "uuid" },
+        "conversation_id_status": { "enum": ["confirmed", "unknown"] },
+        "conversation_id_kind": { "enum": ["codex_thread_id", "grok_session_id"] },
+        "identity_source": {
+          "enum": [
+            "open_session_file",
+            "cli_resume_argument",
+            "cli_session_id_argument",
+            "tmux_scrollback_resume_command",
+            "conflicting_evidence",
+            "unavailable"
+          ]
+        },
+        "source_path": { "type": ["string", "null"] },
+        "process_pids": { "$ref": "#/$defs/processPids" },
+        "stable_mapping_key": { "type": ["string", "null"] },
+        "resume_command": { "type": ["string", "null"] },
+        "evidence": { "type": "string", "minLength": 1 }
+      }
+    },
+    "conversation": {
+      "allOf": [
+        { "$ref": "#/$defs/conversationCommon" },
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "conversation_id_status": { "const": "confirmed" },
+                "conversation_id": { "type": "string", "format": "uuid" },
+                "stable_mapping_key": { "type": "string", "minLength": 1 },
+                "resume_command": { "type": "string", "minLength": 1 }
+              }
+            },
+            {
+              "properties": {
+                "conversation_id_status": { "const": "unknown" },
+                "conversation_id": { "type": "null" },
+                "stable_mapping_key": { "type": "null" },
+                "resume_command": { "type": "null" }
+              }
+            }
+          ]
+        }
+      ],
+      "unevaluatedProperties": false
+    },
+    "pane": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "session", "window", "pane", "target", "pid", "command", "path",
+        "attached", "selected", "dead", "cpu_percent", "memory_mb",
+        "process_count", "tools", "activity", "activity_source", "note",
+        "anomalies", "session_id", "session_created", "window_id",
+        "server_instance_id", "pane_instance_id", "tmux_target",
+        "tmux_session_name", "tmux_window_index", "tmux_window_name",
+        "tmux_pane_index", "pane_id", "pane_pid", "working_directory",
+        "agent_conversations"
+      ],
+      "properties": {
+        "session": { "type": "string" },
+        "window": { "type": "string" },
+        "pane": { "type": "string", "pattern": "^%[0-9]+$" },
+        "target": { "type": "string" },
+        "pid": { "type": "integer", "minimum": 1 },
+        "command": { "type": "string" },
+        "path": { "type": "string" },
+        "attached": { "type": "boolean" },
+        "selected": { "type": "boolean" },
+        "dead": { "type": "boolean" },
+        "cpu_percent": { "type": "number", "minimum": 0 },
+        "memory_mb": { "type": "number", "minimum": 0 },
+        "process_count": { "type": "integer", "minimum": 0 },
+        "tools": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["codex", "grok"] }
+        },
+        "activity": { "enum": ["active", "inactive", "idle", "dead"] },
+        "activity_source": { "type": "string" },
+        "note": { "type": "string" },
+        "anomalies": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "enum": ["CPU", "MEM", "DEAD"] }
+        },
+        "session_id": { "type": "string", "pattern": "^\\$[0-9]+$" },
+        "session_created": { "type": "integer", "minimum": 1 },
+        "window_id": { "type": "string", "pattern": "^@[0-9]+$" },
+        "server_instance_id": { "$ref": "#/$defs/serverInstanceId" },
+        "pane_instance_id": { "type": "string", "minLength": 1 },
+        "tmux_target": { "type": "string", "minLength": 1 },
+        "tmux_session_name": { "type": "string" },
+        "tmux_window_index": { "type": "integer", "minimum": 0 },
+        "tmux_window_name": { "type": "string" },
+        "tmux_pane_index": { "type": "integer", "minimum": 0 },
+        "pane_id": { "type": "string", "pattern": "^%[0-9]+$" },
+        "pane_pid": { "type": "integer", "minimum": 1 },
+        "working_directory": { "type": "string" },
+        "agent_conversations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/conversation" }
+        }
+      }
+    },
+    "recoveryEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool", "conversation_id", "conversation_id_status",
+        "conversation_id_kind", "identity_source", "source_path",
+        "stable_mapping_key", "tmux_target", "tmux_session_name", "pane_id",
+        "pane_pid", "process_pids", "working_directory", "resume_command"
+      ],
+      "properties": {
+        "tool": { "enum": ["codex", "grok"] },
+        "conversation_id": { "type": ["string", "null"], "format": "uuid" },
+        "conversation_id_status": { "enum": ["confirmed", "unknown"] },
+        "conversation_id_kind": { "enum": ["codex_thread_id", "grok_session_id"] },
+        "identity_source": { "type": "string", "minLength": 1 },
+        "source_path": { "type": ["string", "null"] },
+        "stable_mapping_key": { "type": ["string", "null"] },
+        "tmux_target": { "type": "string" },
+        "tmux_session_name": { "type": "string" },
+        "pane_id": { "type": "string" },
+        "pane_pid": { "type": "integer", "minimum": 1 },
+        "process_pids": { "$ref": "#/$defs/processPids" },
+        "working_directory": { "type": "string" },
+        "resume_command": { "type": ["string", "null"] }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "conversation_id_status": { "const": "confirmed" } } },
+          "then": {
+            "properties": {
+              "conversation_id": { "type": "string", "format": "uuid" },
+              "stable_mapping_key": { "type": "string", "minLength": 1 },
+              "resume_command": { "type": "string", "minLength": 1 }
+            }
+          },
+          "else": {
+            "properties": {
+              "conversation_id": { "type": "null" },
+              "stable_mapping_key": { "type": "null" },
+              "resume_command": { "type": "null" }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
