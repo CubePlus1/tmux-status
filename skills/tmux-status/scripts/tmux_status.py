@@ -545,8 +545,6 @@ CODEX_VALUE_OPTIONS = {
     "-C",
     "--disable",
     "--enable",
-    "-i",
-    "--image",
     "--local-provider",
     "-m",
     "--model",
@@ -557,6 +555,7 @@ CODEX_VALUE_OPTIONS = {
     "-s",
     "--sandbox",
 }
+CODEX_MULTI_VALUE_OPTIONS = {"-i", "--image"}
 
 
 def codex_subcommand_arguments(arguments: List[str], subcommand: str) -> Optional[List[str]]:
@@ -629,6 +628,19 @@ def session_id_from_arguments(
             return None
         if token == "--":
             return None
+        if token in CODEX_MULTI_VALUE_OPTIONS or any(
+            token.startswith(option + "=") for option in CODEX_MULTI_VALUE_OPTIONS
+        ):
+            index += 1
+            while index < len(resume_arguments):
+                candidate = resume_arguments[index]
+                if candidate.startswith("-"):
+                    break
+                session_id = validated_uuid(candidate)
+                if session_id:
+                    return session_id, "cli_resume_argument"
+                index += 1
+            continue
         if token in CODEX_VALUE_OPTIONS:
             index += 2
             continue
@@ -887,8 +899,9 @@ def collect_agent_conversations(
     scrollback: Callable[[str], str] = capture_pane_scrollback,
     working_directory: Callable[[int], Optional[str]] = process_working_directory,
     arguments: Callable[[int], Optional[List[str]]] = process_arguments,
-    instance_key: Callable[[int], str] = process_instance_key,
+    instance_key: Optional[Callable[[int], str]] = None,
 ) -> List[AgentConversation]:
+    instance_key = instance_key or process_instance_key
     tool_processes: Dict[str, List[ProcessInfo]] = {}
     for process in tree:
         if "Z" in process.state.upper():
@@ -906,6 +919,7 @@ def collect_agent_conversations(
         process_argvs = {}
         process_keys = {}
         for process in matching_processes:
+            process_keys[process.pid] = instance_key(process.pid)
             observed_cwd = working_directory(process.pid)
             lossless_arguments = arguments(process.pid)
             process_argvs[process.pid] = lossless_arguments
@@ -927,7 +941,6 @@ def collect_agent_conversations(
             process_cwds_confirmed[process.pid] = bool(
                 observed_cwd or absolute_command_cwd
             )
-            process_keys[process.pid] = instance_key(process.pid)
 
         confirmed: Dict[Tuple[str, str], dict] = {}
         conflicts = []
@@ -947,6 +960,27 @@ def collect_agent_conversations(
                 if metadata:
                     session_id, metadata_cwd = metadata
                     file_evidence[session_id] = (str(path), metadata_cwd)
+            ending_arguments = arguments(process.pid)
+            ending_instance_key = instance_key(process.pid)
+            process_still_matches_tool = (
+                ending_arguments is None
+                or tool_arguments_from_tokens(tool, ending_arguments) is not None
+            )
+            if (
+                ending_instance_key != process_keys[process.pid]
+                or ending_arguments != process_argvs[process.pid]
+                or not process_still_matches_tool
+            ):
+                unavailable_reasons.append(
+                    "PID {} changed incarnation or command during evidence collection".format(
+                        process.pid
+                    )
+                )
+                unavailable_pids.append(process.pid)
+                process_keys[process.pid] = "{}:collection-race:{}".format(
+                    process.pid, uuid.uuid4()
+                )
+                continue
             if len(file_evidence) == 1:
                 session_id, (source_path, metadata_cwd) = next(
                     iter(file_evidence.items())
@@ -1016,6 +1050,7 @@ def collect_agent_conversations(
             for pid in entry["pids"]
         }
         conflicting_keys = set()
+        wrapper_merges = []
         confirmed_items = sorted(confirmed_by_pid.items())
         for index, (left_pid, left_key) in enumerate(confirmed_items):
             for right_pid, right_key in confirmed_items[index + 1 :]:
@@ -1024,12 +1059,25 @@ def collect_agent_conversations(
                 if is_runtime_wrapper_child_pair(
                     left_pid, right_pid, tool, processes_by_pid
                 ):
-                    conflicting_keys.update((left_key, right_key))
-                    conflicts.append(
-                        "related PIDs {} and {} disagree on session identity or working directory".format(
-                            left_pid, right_pid
+                    if left_key[0] != right_key[0]:
+                        conflicting_keys.update((left_key, right_key))
+                        conflicts.append(
+                            "runtime wrapper PID {} and native child PID {} disagree on session identity".format(
+                                left_pid, right_pid
+                            )
                         )
-                    )
+                    elif is_runtime_wrapper_process(
+                        processes_by_pid[left_pid], tool
+                    ):
+                        wrapper_merges.append((left_key, right_key))
+                    else:
+                        wrapper_merges.append((right_key, left_key))
+        for wrapper_key, child_key in wrapper_merges:
+            if wrapper_key in conflicting_keys or child_key in conflicting_keys:
+                continue
+            if wrapper_key not in confirmed or child_key not in confirmed:
+                continue
+            confirmed[child_key]["pids"].extend(confirmed.pop(wrapper_key)["pids"])
         for key in conflicting_keys:
             conflicting_pids.extend(confirmed.pop(key)["pids"])
 

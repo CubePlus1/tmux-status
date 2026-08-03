@@ -14,6 +14,15 @@ SPEC.loader.exec_module(tmux_status)
 
 
 class TmuxStatusTests(unittest.TestCase):
+    def setUp(self):
+        instance_key_patch = patch.object(
+            tmux_status,
+            "process_instance_key",
+            side_effect=lambda pid: "{}:test-process-start".format(pid),
+        )
+        instance_key_patch.start()
+        self.addCleanup(instance_key_patch.stop)
+
     @staticmethod
     def pane(path="/tmp/project"):
         return tmux_status.PaneInfo(
@@ -253,6 +262,7 @@ class TmuxStatusTests(unittest.TestCase):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
         commands = (
             "codex resume -i image.png {}".format(codex_id),
+            "codex resume -i one.png two.png {}".format(codex_id),
             "codex resume --enable feature {}".format(codex_id),
             "codex resume --add-dir /tmp/extra {}".format(codex_id),
             "codex --model gpt-test resume --profile work {}".format(codex_id),
@@ -615,7 +625,46 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual("unknown", conversations[0].conversation_id_status)
         self.assertEqual("conflicting_evidence", conversations[0].identity_source)
         self.assertEqual([101, 102], conversations[0].process_pids)
-        self.assertIn("related PIDs", conversations[0].evidence)
+        self.assertIn("disagree on session identity", conversations[0].evidence)
+
+    def test_wrapper_and_child_same_identity_use_native_child_cwd(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane()
+        wrapper = tmux_status.ProcessInfo(
+            101,
+            100,
+            0.0,
+            1,
+            "S",
+            "0:01",
+            "node /opt/codex resume {}".format(codex_id),
+        )
+        child = tmux_status.ProcessInfo(
+            102,
+            101,
+            0.0,
+            1,
+            "S",
+            "0:01",
+            "codex resume {}".format(codex_id),
+        )
+        conversations = tmux_status.collect_agent_conversations(
+            pane,
+            [wrapper, child],
+            open_paths=lambda _pid: [],
+            scrollback=lambda _pane_id: "",
+            working_directory=lambda pid: "/base" if pid == 101 else "/project",
+            arguments=lambda pid: (
+                ["node", "/opt/codex", "resume", codex_id]
+                if pid == wrapper.pid
+                else ["codex", "resume", codex_id]
+            ),
+        )
+
+        self.assertEqual(1, len(conversations))
+        self.assertEqual("confirmed", conversations[0].conversation_id_status)
+        self.assertEqual([101, 102], conversations[0].process_pids)
+        self.assertEqual("/project", conversations[0].working_directory)
 
     def test_nested_native_tool_processes_keep_independent_identities(self):
         parent_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
@@ -749,6 +798,35 @@ class TmuxStatusTests(unittest.TestCase):
             ["98765:process-start-a"], conversations[0].process_instance_keys
         )
         self.assertNotIn("98765", conversations[0].evidence)
+
+    def test_process_incarnation_change_discards_collected_evidence(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane()
+        process = tmux_status.ProcessInfo(
+            101,
+            100,
+            0.0,
+            1,
+            "S",
+            "0:01",
+            "codex resume {}".format(codex_id),
+        )
+        keys = iter(["101:first-start", "101:replacement-start"])
+        conversations = tmux_status.collect_agent_conversations(
+            pane,
+            [process],
+            open_paths=lambda _pid: [],
+            scrollback=lambda _pane_id: "",
+            working_directory=lambda _pid: "/project",
+            arguments=lambda _pid: ["codex", "resume", codex_id],
+            instance_key=lambda _pid: next(keys),
+        )
+
+        self.assertEqual(1, len(conversations))
+        self.assertEqual("unknown", conversations[0].conversation_id_status)
+        self.assertEqual("unavailable", conversations[0].identity_source)
+        self.assertIsNone(conversations[0].resume_command)
+        self.assertIn("changed incarnation", conversations[0].evidence)
 
     def test_conflicting_open_session_files_are_unknown(self):
         pane = self.pane()
