@@ -1627,6 +1627,40 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertIsNone(conversations[0].resume_command)
         self.assertIn("changed incarnation", conversations[0].evidence)
 
+    def test_process_cwd_change_discards_collected_evidence(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane()
+        process = tmux_status.ProcessInfo(
+            101,
+            100,
+            0.0,
+            1,
+            "S",
+            "0:01",
+            "codex resume {}".format(codex_id),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / "first"
+            second = Path(directory) / "second"
+            first.mkdir()
+            second.mkdir()
+            cwd_reads = iter([str(first), str(second)])
+            conversations = tmux_status.collect_agent_conversations(
+                pane,
+                [process],
+                open_paths=lambda _pid: [],
+                scrollback=lambda _pane_id: "",
+                working_directory=lambda _pid: next(cwd_reads),
+                arguments=lambda _pid: ["codex", "resume", codex_id],
+                instance_key=lambda _pid: "101:same-start",
+            )
+
+        self.assertEqual(1, len(conversations))
+        self.assertEqual("unknown", conversations[0].conversation_id_status)
+        self.assertEqual("unavailable", conversations[0].identity_source)
+        self.assertIsNone(conversations[0].resume_command)
+        self.assertIn("working directory", conversations[0].evidence)
+
     def test_conflicting_open_session_files_are_unknown(self):
         pane = self.pane()
         process = tmux_status.ProcessInfo(

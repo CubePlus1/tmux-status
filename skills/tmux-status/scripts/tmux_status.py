@@ -1494,12 +1494,16 @@ def collect_agent_conversations(
     for tool, matching_processes in sorted(tool_processes.items()):
         process_cwds = {}
         process_cwds_confirmed = {}
+        observed_process_cwds = {}
         process_argvs = {}
         process_environments = {}
         process_keys = {}
         for process in matching_processes:
             process_keys[process.pid] = instance_key(process.pid)
             observed_cwd = working_directory(process.pid)
+            observed_process_cwds[process.pid] = (
+                os.path.normpath(observed_cwd) if observed_cwd else None
+            )
             lossless_arguments = observed_arguments[process.pid]
             process_argvs[process.pid] = lossless_arguments
             process_environments[process.pid] = environment(process.pid)
@@ -1554,6 +1558,12 @@ def collect_agent_conversations(
                     file_evidence[session_id] = (str(source_path), metadata_cwd)
             ending_arguments = arguments(process.pid)
             ending_instance_key = instance_key(process.pid)
+            ending_observed_cwd = working_directory(process.pid)
+            normalized_ending_cwd = (
+                os.path.normpath(ending_observed_cwd)
+                if ending_observed_cwd
+                else None
+            )
             process_still_matches_tool = (
                 ending_arguments is None
                 or tool_arguments_from_tokens(tool, ending_arguments) is not None
@@ -1561,10 +1571,12 @@ def collect_agent_conversations(
             if (
                 ending_instance_key != process_keys[process.pid]
                 or ending_arguments != process_argvs[process.pid]
+                or normalized_ending_cwd
+                != observed_process_cwds[process.pid]
                 or not process_still_matches_tool
             ):
                 unavailable_reasons.append(
-                    "PID {} changed incarnation or command during evidence collection".format(
+                    "PID {} changed incarnation, command, or working directory during evidence collection".format(
                         process.pid
                     )
                 )
