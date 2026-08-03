@@ -653,6 +653,33 @@ class TmuxStatusTests(unittest.TestCase):
 
         self.assertEqual({"CODEX_HOME": "/tmp/Custom Codex"}, environment)
 
+    def test_reads_lossless_arguments_from_darwin_procargs(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        expected_arguments = [
+            "/Applications/Codex Agent/codex",
+            "resume",
+            codex_id,
+        ]
+        raw_procargs = (
+            struct.pack("=i", len(expected_arguments))
+            + b"/Applications/Codex Agent/codex\0\0"
+            + b"\0".join(os.fsencode(value) for value in expected_arguments)
+            + b"\0CODEX_HOME=/tmp/Custom Codex\0"
+        )
+        with patch.object(tmux_status.sys, "platform", "darwin"):
+            with patch.object(
+                tmux_status.Path, "read_bytes", side_effect=OSError
+            ):
+                with patch.object(
+                    tmux_status,
+                    "darwin_process_arguments_and_environment",
+                    return_value=raw_procargs,
+                ):
+                    arguments = tmux_status.process_arguments(101)
+
+        self.assertEqual(expected_arguments, arguments)
+        self.assertEqual("codex", tmux_status.tool_for_arguments(arguments))
+
     def test_empty_process_environment_uses_agent_default_home(self):
         with patch.dict(
             tmux_status.os.environ,

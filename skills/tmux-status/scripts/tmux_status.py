@@ -994,7 +994,14 @@ def process_arguments(pid: int) -> Optional[List[str]]:
     try:
         raw_arguments = cmdline_path.read_bytes().split(b"\0")
     except OSError:
-        return None
+        if sys.platform != "darwin":
+            return None
+        raw_procargs = darwin_process_arguments_and_environment(pid)
+        if not raw_procargs:
+            return None
+        raw_arguments, _environment = parse_darwin_arguments_and_environment(
+            raw_procargs
+        )
     arguments = [os.fsdecode(argument) for argument in raw_arguments if argument]
     return arguments or None
 
@@ -1046,23 +1053,33 @@ def darwin_process_arguments_and_environment(pid: int) -> Optional[bytes]:
 
 def parse_darwin_environment(raw_procargs: bytes) -> List[bytes]:
     """Extract NUL-delimited environment entries from KERN_PROCARGS2 output."""
+    _arguments, environment = parse_darwin_arguments_and_environment(raw_procargs)
+    return environment
+
+
+def parse_darwin_arguments_and_environment(
+    raw_procargs: bytes,
+) -> Tuple[List[bytes], List[bytes]]:
+    """Extract lossless argv and environment entries from KERN_PROCARGS2 output."""
     integer_size = struct.calcsize("=i")
     if len(raw_procargs) < integer_size:
-        return []
+        return [], []
     argument_count = struct.unpack_from("=i", raw_procargs)[0]
     if argument_count < 0:
-        return []
+        return [], []
     offset = integer_size
     executable_end = raw_procargs.find(b"\0", offset)
     if executable_end < 0:
-        return []
+        return [], []
     offset = executable_end + 1
     while offset < len(raw_procargs) and raw_procargs[offset] == 0:
         offset += 1
+    arguments = []
     for _ in range(argument_count):
         argument_end = raw_procargs.find(b"\0", offset)
         if argument_end < 0:
-            return []
+            return [], []
+        arguments.append(raw_procargs[offset:argument_end])
         offset = argument_end + 1
     while offset < len(raw_procargs) and raw_procargs[offset] == 0:
         offset += 1
@@ -1076,7 +1093,7 @@ def parse_darwin_environment(raw_procargs: bytes) -> List[bytes]:
         if entry:
             entries.append(entry)
         offset = entry_end + 1
-    return entries
+    return arguments, entries
 
 
 def linux_process_start_time(stat_text: str) -> Optional[str]:
