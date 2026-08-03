@@ -385,7 +385,7 @@ class TmuxStatusTests(unittest.TestCase):
             [process],
             open_paths=lambda _pid: [],
             scrollback=lambda _pane_id: "",
-            working_directory=lambda _pid: "/process/project",
+            working_directory=lambda _pid: "/agent/project",
             arguments=lambda _pid: [
                 "codex",
                 "-C",
@@ -435,6 +435,75 @@ class TmuxStatusTests(unittest.TestCase):
             conversations[0].resume_command,
         )
 
+    def test_observed_cwd_prevents_reapplying_relative_cli_cwd(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane("/base")
+        process = tmux_status.ProcessInfo(
+            101,
+            100,
+            0.0,
+            1,
+            "S",
+            "0:01",
+            "codex -C sub resume {}".format(codex_id),
+        )
+        conversations = tmux_status.collect_agent_conversations(
+            pane,
+            [process],
+            open_paths=lambda _pid: [],
+            scrollback=lambda _pane_id: "",
+            working_directory=lambda _pid: "/base/sub",
+            arguments=lambda _pid: ["codex", "-C", "sub", "resume", codex_id],
+        )
+
+        self.assertEqual("confirmed", conversations[0].conversation_id_status)
+        self.assertEqual("/base/sub", conversations[0].working_directory)
+
+    def test_current_process_cwd_wins_over_stale_session_metadata(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane("/pane/project")
+        process = tmux_status.ProcessInfo(
+            101,
+            100,
+            0.0,
+            1,
+            "S",
+            "0:01",
+            "codex -C /new resume {}".format(codex_id),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sessions" / "2026" / "08" / "03"
+            path.mkdir(parents=True)
+            rollout = path / "rollout-{}.jsonl".format(codex_id)
+            rollout.write_text(
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {"id": codex_id, "cwd": "/old"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            conversations = tmux_status.collect_agent_conversations(
+                pane,
+                [process],
+                open_paths=lambda _pid: [rollout],
+                scrollback=lambda _pane_id: "",
+                working_directory=lambda _pid: "/new",
+                arguments=lambda _pid: [
+                    "codex",
+                    "-C",
+                    "/new",
+                    "resume",
+                    codex_id,
+                ],
+            )
+
+        self.assertEqual("confirmed", conversations[0].conversation_id_status)
+        self.assertEqual("/new", conversations[0].working_directory)
+        self.assertIn("-C /new", conversations[0].resume_command)
+
     def test_runtime_wrapper_folds_into_confirmed_child_invocation(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
         pane = self.pane()
@@ -469,7 +538,7 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual(1, len(conversations))
         self.assertEqual("confirmed", conversations[0].conversation_id_status)
         self.assertEqual([101, 102], conversations[0].process_pids)
-        self.assertEqual("/agent/project", conversations[0].working_directory)
+        self.assertEqual("/process/project", conversations[0].working_directory)
 
     def test_unresolved_child_folds_into_confirmed_wrapper_invocation(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
@@ -547,6 +616,53 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual("conflicting_evidence", conversations[0].identity_source)
         self.assertEqual([101, 102], conversations[0].process_pids)
         self.assertIn("related PIDs", conversations[0].evidence)
+
+    def test_nested_native_tool_processes_keep_independent_identities(self):
+        parent_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        child_id = "019fb21f-84c9-7692-8371-1f9aa3e75401"
+        pane = self.pane()
+        parent = tmux_status.ProcessInfo(
+            101,
+            100,
+            0.0,
+            1,
+            "S",
+            "0:01",
+            "codex resume {}".format(parent_id),
+        )
+        child = tmux_status.ProcessInfo(
+            102,
+            101,
+            0.0,
+            1,
+            "S",
+            "0:01",
+            "codex resume {}".format(child_id),
+        )
+        conversations = tmux_status.collect_agent_conversations(
+            pane,
+            [parent, child],
+            open_paths=lambda _pid: [],
+            scrollback=lambda _pane_id: "",
+            working_directory=lambda pid: "/project/{}".format(pid),
+            arguments=lambda pid: [
+                "codex",
+                "resume",
+                parent_id if pid == parent.pid else child_id,
+            ],
+        )
+
+        self.assertEqual(2, len(conversations))
+        self.assertEqual(
+            {parent_id, child_id},
+            {conversation.conversation_id for conversation in conversations},
+        )
+        self.assertTrue(
+            all(
+                conversation.conversation_id_status == "confirmed"
+                for conversation in conversations
+            )
+        )
 
     def test_identity_without_process_associated_cwd_remains_unknown(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"

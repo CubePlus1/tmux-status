@@ -386,6 +386,56 @@ def detect_tools(processes: Iterable[ProcessInfo]) -> List[str]:
     return sorted(found)
 
 
+def executable_name_matches_tool(name: str, tool: str) -> bool:
+    if name in TOOL_NAMES.get(tool, ()):
+        return True
+    if tool == "codex":
+        return bool(re.fullmatch(r"codex(?:-cli)?", name))
+    if tool == "grok":
+        return bool(
+            re.fullmatch(
+                r"grok(?:-cli)?(?:-\d+(?:\.\d+)+(?:-[a-z0-9._-]+)*)?",
+                name,
+            )
+        )
+    return False
+
+
+def is_runtime_wrapper_process(process: ProcessInfo, tool: str) -> bool:
+    names = executable_names(process.command)
+    return (
+        len(names) > 1
+        and names[0] in RUNTIME_NAMES
+        and any(executable_name_matches_tool(name, tool) for name in names[1:])
+    )
+
+
+def is_native_tool_process(process: ProcessInfo, tool: str) -> bool:
+    names = executable_names(process.command)
+    return bool(names and executable_name_matches_tool(names[0], tool))
+
+
+def is_runtime_wrapper_child_pair(
+    left_pid: int,
+    right_pid: int,
+    tool: str,
+    processes_by_pid: Dict[int, ProcessInfo],
+) -> bool:
+    left = processes_by_pid.get(left_pid)
+    right = processes_by_pid.get(right_pid)
+    if left is None or right is None:
+        return False
+    if right.ppid == left.pid:
+        return is_runtime_wrapper_process(left, tool) and is_native_tool_process(
+            right, tool
+        )
+    if left.ppid == right.pid:
+        return is_runtime_wrapper_process(right, tool) and is_native_tool_process(
+            left, tool
+        )
+    return False
+
+
 def validated_uuid(value: str) -> Optional[str]:
     value = value.strip().strip("'\"`.,;:()[]{}<>")
     if not UUID_PATTERN.fullmatch(value):
@@ -830,21 +880,6 @@ def append_unknown_conversations(
         )
 
 
-def process_is_ancestor(
-    ancestor_pid: int,
-    descendant_pid: int,
-    processes_by_pid: Dict[int, ProcessInfo],
-) -> bool:
-    current = processes_by_pid.get(descendant_pid)
-    seen = set()
-    while current and current.pid not in seen:
-        seen.add(current.pid)
-        if current.ppid == ancestor_pid:
-            return True
-        current = processes_by_pid.get(current.ppid)
-    return False
-
-
 def collect_agent_conversations(
     pane: PaneInfo,
     tree: List[ProcessInfo],
@@ -879,11 +914,19 @@ def collect_agent_conversations(
                 if lossless_arguments is not None
                 else None
             )
-            process_cwds[process.pid] = resolve_working_directory(
-                command_cwd,
-                observed_cwd or pane.current_path,
+            absolute_command_cwd = (
+                os.path.normpath(os.path.expanduser(command_cwd))
+                if command_cwd and os.path.isabs(os.path.expanduser(command_cwd))
+                else None
             )
-            process_cwds_confirmed[process.pid] = bool(command_cwd or observed_cwd)
+            process_cwds[process.pid] = (
+                os.path.normpath(observed_cwd)
+                if observed_cwd
+                else absolute_command_cwd or pane.current_path
+            )
+            process_cwds_confirmed[process.pid] = bool(
+                observed_cwd or absolute_command_cwd
+            )
             process_keys[process.pid] = instance_key(process.pid)
 
         confirmed: Dict[Tuple[str, str], dict] = {}
@@ -916,10 +959,11 @@ def collect_agent_conversations(
                     )
                     conflicting_pids.append(process.pid)
                     continue
-                cwd = resolve_working_directory(
-                    metadata_cwd, process_cwds[process.pid]
-                )
-                if not metadata_cwd and not process_cwds_confirmed[process.pid]:
+                if process_cwds_confirmed[process.pid]:
+                    cwd = process_cwds[process.pid]
+                elif metadata_cwd:
+                    cwd = resolve_working_directory(metadata_cwd, pane.current_path)
+                else:
                     unavailable_reasons.append(
                         "PID {} has a session UUID but no process-associated working directory".format(
                             process.pid
@@ -977,9 +1021,9 @@ def collect_agent_conversations(
             for right_pid, right_key in confirmed_items[index + 1 :]:
                 if left_key == right_key:
                     continue
-                if process_is_ancestor(
-                    left_pid, right_pid, processes_by_pid
-                ) or process_is_ancestor(right_pid, left_pid, processes_by_pid):
+                if is_runtime_wrapper_child_pair(
+                    left_pid, right_pid, tool, processes_by_pid
+                ):
                     conflicting_keys.update((left_key, right_key))
                     conflicts.append(
                         "related PIDs {} and {} disagree on session identity or working directory".format(
@@ -994,10 +1038,8 @@ def collect_agent_conversations(
             related_entries = []
             for key, entry in confirmed.items():
                 for confirmed_pid in entry["pids"]:
-                    if process_is_ancestor(
-                        unresolved_pid, confirmed_pid, processes_by_pid
-                    ) or process_is_ancestor(
-                        confirmed_pid, unresolved_pid, processes_by_pid
+                    if is_runtime_wrapper_child_pair(
+                        unresolved_pid, confirmed_pid, tool, processes_by_pid
                     ):
                         related_entries.append(key)
                     if key in related_entries:
