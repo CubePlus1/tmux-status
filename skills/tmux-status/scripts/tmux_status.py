@@ -319,11 +319,7 @@ def descendants(root_pid: int, processes: Dict[int, ProcessInfo]) -> List[Proces
     return found
 
 
-def executable_names(command: str) -> List[str]:
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        tokens = re.findall(r"[^\s\"']+", command)
+def executable_names_from_tokens(tokens: Sequence[str]) -> List[str]:
     if not tokens:
         return []
 
@@ -367,6 +363,14 @@ def executable_names(command: str) -> List[str]:
         name = os.path.basename(candidate).lower().lstrip("-")
         names.append(re.sub(r"[^a-z0-9._-].*$", "", name))
     return names
+
+
+def executable_names(command: str) -> List[str]:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = re.findall(r"[^\s\"']+", command)
+    return executable_names_from_tokens(tokens)
 
 
 def tool_for_process(process: ProcessInfo) -> Optional[str]:
@@ -431,8 +435,16 @@ def is_runtime_name(name: str) -> bool:
     return name in RUNTIME_NAMES or bool(re.fullmatch(r"python\d+(?:\.\d+)+", name))
 
 
-def is_runtime_wrapper_process(process: ProcessInfo, tool: str) -> bool:
-    names = executable_names(process.command)
+def is_runtime_wrapper_process(
+    process: ProcessInfo,
+    tool: str,
+    arguments: Optional[Sequence[str]] = None,
+) -> bool:
+    names = (
+        executable_names_from_tokens(arguments)
+        if arguments is not None
+        else executable_names(process.command)
+    )
     return (
         len(names) > 1
         and is_runtime_name(names[0])
@@ -440,8 +452,16 @@ def is_runtime_wrapper_process(process: ProcessInfo, tool: str) -> bool:
     )
 
 
-def is_native_tool_process(process: ProcessInfo, tool: str) -> bool:
-    names = executable_names(process.command)
+def is_native_tool_process(
+    process: ProcessInfo,
+    tool: str,
+    arguments: Optional[Sequence[str]] = None,
+) -> bool:
+    names = (
+        executable_names_from_tokens(arguments)
+        if arguments is not None
+        else executable_names(process.command)
+    )
     return bool(names and executable_name_matches_tool(names[0], tool))
 
 
@@ -450,18 +470,29 @@ def is_runtime_wrapper_child_pair(
     right_pid: int,
     tool: str,
     processes_by_pid: Dict[int, ProcessInfo],
+    arguments_by_pid: Optional[Dict[int, Optional[List[str]]]] = None,
 ) -> bool:
     left = processes_by_pid.get(left_pid)
     right = processes_by_pid.get(right_pid)
     if left is None or right is None:
         return False
+    left_arguments = (
+        arguments_by_pid.get(left_pid) if arguments_by_pid is not None else None
+    )
+    right_arguments = (
+        arguments_by_pid.get(right_pid) if arguments_by_pid is not None else None
+    )
     if right.ppid == left.pid:
-        return is_runtime_wrapper_process(left, tool) and is_native_tool_process(
-            right, tool
+        return is_runtime_wrapper_process(
+            left, tool, left_arguments
+        ) and is_native_tool_process(
+            right, tool, right_arguments
         )
     if left.ppid == right.pid:
-        return is_runtime_wrapper_process(right, tool) and is_native_tool_process(
-            left, tool
+        return is_runtime_wrapper_process(
+            right, tool, right_arguments
+        ) and is_native_tool_process(
+            left, tool, left_arguments
         )
     return False
 
@@ -1052,6 +1083,7 @@ def append_unknown_conversations(
     identity_source: str = "unavailable",
     conflicting_process_pids: Optional[Set[int]] = None,
     unavailable_evidence: Optional[str] = None,
+    arguments_by_pid: Optional[Dict[int, Optional[List[str]]]] = None,
 ) -> None:
     remaining = set(process_pids)
     invocation_groups = []
@@ -1063,7 +1095,11 @@ def append_unknown_conversations(
             for candidate in sorted(remaining - group):
                 if any(
                     is_runtime_wrapper_child_pair(
-                        candidate, member, tool, processes_by_pid
+                        candidate,
+                        member,
+                        tool,
+                        processes_by_pid,
+                        arguments_by_pid,
                     )
                     for member in group
                 ):
@@ -1078,7 +1114,11 @@ def append_unknown_conversations(
         native_pids = [
             pid
             for pid in group_pids
-            if is_native_tool_process(processes_by_pid[pid], tool)
+            if is_native_tool_process(
+                processes_by_pid[pid],
+                tool,
+                arguments_by_pid.get(pid) if arguments_by_pid is not None else None,
+            )
         ]
         cwd = process_cwds[native_pids[0] if native_pids else group_pids[0]]
         conversations.append(
@@ -1271,7 +1311,7 @@ def collect_agent_conversations(
             for key, entry in confirmed.items()
             for pid in entry["pids"]
         }
-        conflicting_keys = set()
+        conflicting_pairs = []
         wrapper_merges = []
         confirmed_items = sorted(confirmed_by_pid.items())
         for index, (left_pid, left_key) in enumerate(confirmed_items):
@@ -1279,29 +1319,50 @@ def collect_agent_conversations(
                 if left_key == right_key:
                     continue
                 if is_runtime_wrapper_child_pair(
-                    left_pid, right_pid, tool, processes_by_pid
+                    left_pid,
+                    right_pid,
+                    tool,
+                    processes_by_pid,
+                    process_argvs,
                 ):
                     if left_key[0] != right_key[0]:
-                        conflicting_keys.update((left_key, right_key))
+                        conflicting_pairs.append((left_pid, right_pid))
                         conflicts.append(
                             "runtime wrapper PID {} and native child PID {} disagree on session identity".format(
                                 left_pid, right_pid
                             )
                         )
                     elif is_runtime_wrapper_process(
-                        processes_by_pid[left_pid], tool
+                        processes_by_pid[left_pid],
+                        tool,
+                        process_argvs[left_pid],
                     ):
-                        wrapper_merges.append((left_key, right_key))
+                        wrapper_merges.append((left_pid, left_key, right_key))
                     else:
-                        wrapper_merges.append((right_key, left_key))
-        for wrapper_key, child_key in wrapper_merges:
-            if wrapper_key in conflicting_keys or child_key in conflicting_keys:
+                        wrapper_merges.append((right_pid, right_key, left_key))
+        conflicting_pair_pids = {
+            pid for pair in conflicting_pairs for pid in pair
+        }
+        for pid in conflicting_pair_pids:
+            key = confirmed_by_pid[pid]
+            if key not in confirmed:
+                continue
+            confirmed[key]["pids"].remove(pid)
+            conflicting_pids.append(pid)
+            if not confirmed[key]["pids"]:
+                del confirmed[key]
+        for wrapper_pid, wrapper_key, child_key in wrapper_merges:
+            if wrapper_pid in conflicting_pair_pids:
                 continue
             if wrapper_key not in confirmed or child_key not in confirmed:
                 continue
-            confirmed[child_key]["pids"].extend(confirmed.pop(wrapper_key)["pids"])
-        for key in conflicting_keys:
-            conflicting_pids.extend(confirmed.pop(key)["pids"])
+            if wrapper_pid not in confirmed[wrapper_key]["pids"]:
+                continue
+            confirmed[wrapper_key]["pids"].remove(wrapper_pid)
+            if wrapper_pid not in confirmed[child_key]["pids"]:
+                confirmed[child_key]["pids"].append(wrapper_pid)
+            if not confirmed[wrapper_key]["pids"]:
+                del confirmed[wrapper_key]
 
         remaining_unresolved = []
         for unresolved_pid in unresolved_pids:
@@ -1309,7 +1370,11 @@ def collect_agent_conversations(
             for key, entry in confirmed.items():
                 for confirmed_pid in entry["pids"]:
                     if is_runtime_wrapper_child_pair(
-                        unresolved_pid, confirmed_pid, tool, processes_by_pid
+                        unresolved_pid,
+                        confirmed_pid,
+                        tool,
+                        processes_by_pid,
+                        process_argvs,
                     ):
                         related_entries.append(key)
                     if key in related_entries:
@@ -1359,6 +1424,7 @@ def collect_agent_conversations(
                     set(conflicting_pids),
                     "; ".join(unavailable_parts)
                     or "no explicit UUID found for this process",
+                    arguments_by_pid=process_argvs,
                 )
             continue
 
@@ -1381,6 +1447,7 @@ def collect_agent_conversations(
                 set(conflicting_pids),
                 "; ".join(unavailable_reasons)
                 or "no explicit UUID found for this process",
+                arguments_by_pid=process_argvs,
             )
             continue
 
@@ -1394,6 +1461,7 @@ def collect_agent_conversations(
                 process_keys,
                 processes_by_pid,
                 "cannot associate one scrollback UUID with multiple tool processes",
+                arguments_by_pid=process_argvs,
             )
             continue
 
@@ -1409,6 +1477,7 @@ def collect_agent_conversations(
                 process_keys,
                 processes_by_pid,
                 "one resume UUID exists in scrollback but cannot be associated with the live process",
+                arguments_by_pid=process_argvs,
             )
         elif len(scrollback_ids) > 1:
             append_unknown_conversations(
@@ -1420,6 +1489,7 @@ def collect_agent_conversations(
                 processes_by_pid,
                 "multiple distinct resume UUIDs found in tmux scrollback",
                 "conflicting_evidence",
+                arguments_by_pid=process_argvs,
             )
         else:
             append_unknown_conversations(
@@ -1430,6 +1500,7 @@ def collect_agent_conversations(
                 process_keys,
                 processes_by_pid,
                 "no explicit UUID found in open session files, CLI arguments, or tmux scrollback",
+                arguments_by_pid=process_argvs,
             )
     return conversations
 

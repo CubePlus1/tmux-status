@@ -854,6 +854,88 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual({"101", "102"}, set(conversations[0].process_instances))
         self.assertEqual("/project", conversations[0].working_directory)
 
+    def test_same_identity_wrappers_merge_only_into_their_own_children(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        processes = [
+            tmux_status.ProcessInfo(
+                101, 100, 0.0, 1, "S", "0:01", "node /opt/codex"
+            ),
+            tmux_status.ProcessInfo(
+                102, 101, 0.0, 1, "S", "0:01", "/usr/local/bin/codex"
+            ),
+            tmux_status.ProcessInfo(
+                201, 100, 0.0, 1, "S", "0:01", "node /opt/codex"
+            ),
+            tmux_status.ProcessInfo(
+                202, 201, 0.0, 1, "S", "0:01", "/usr/local/bin/codex"
+            ),
+        ]
+        arguments = {
+            101: ["node", "/opt/codex", "resume", codex_id],
+            102: ["codex", "resume", codex_id],
+            201: ["node", "/opt/codex", "resume", codex_id],
+            202: ["codex", "resume", codex_id],
+        }
+        working_directories = {
+            101: "/base",
+            102: "/project-one",
+            201: "/base",
+            202: "/project-two",
+        }
+
+        conversations = tmux_status.collect_agent_conversations(
+            self.pane(),
+            processes,
+            open_paths=lambda _pid: [],
+            scrollback=lambda _pane_id: "",
+            working_directory=lambda pid: working_directories[pid],
+            arguments=lambda pid: arguments[pid],
+        )
+
+        pids_by_cwd = {
+            conversation.working_directory: set(conversation.process_instances)
+            for conversation in conversations
+        }
+        self.assertEqual(
+            {
+                "/project-one": {"101", "102"},
+                "/project-two": {"201", "202"},
+            },
+            pids_by_cwd,
+        )
+
+    def test_lossless_wrapper_argv_folds_child_when_tool_path_has_spaces(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        wrapper = tmux_status.ProcessInfo(
+            101,
+            100,
+            0.0,
+            1,
+            "S",
+            "0:01",
+            "node /tmp/my tools/codex resume {}".format(codex_id),
+        )
+        child = tmux_status.ProcessInfo(
+            102, 101, 0.0, 1, "S", "0:01", "/usr/local/bin/codex"
+        )
+        arguments = {
+            101: ["node", "/tmp/my tools/codex", "resume", codex_id],
+            102: ["codex"],
+        }
+
+        conversations = tmux_status.collect_agent_conversations(
+            self.pane(),
+            [wrapper, child],
+            open_paths=lambda _pid: [],
+            scrollback=lambda _pane_id: "",
+            working_directory=lambda _pid: "/project",
+            arguments=lambda pid: arguments[pid],
+        )
+
+        self.assertEqual(1, len(conversations))
+        self.assertEqual("confirmed", conversations[0].conversation_id_status)
+        self.assertEqual({"101", "102"}, set(conversations[0].process_instances))
+
     def test_nested_native_tool_processes_keep_independent_identities(self):
         parent_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
         child_id = "019fb21f-84c9-7692-8371-1f9aa3e75401"
