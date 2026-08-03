@@ -546,6 +546,17 @@ def tool_arguments_from_tokens(
         index += 1
         while index < len(tokens):
             token = tokens[index]
+            if runtime_name.startswith("python"):
+                if token in ("-X", "-W", "--check-hash-based-pycs"):
+                    index += 2
+                    continue
+                if (
+                    (token.startswith("-X") and token != "-X")
+                    or (token.startswith("-W") and token != "-W")
+                    or token.startswith("--check-hash-based-pycs=")
+                ):
+                    index += 1
+                    continue
             if token == "-m" and index + 1 < len(tokens):
                 executable_index = index + 1
                 break

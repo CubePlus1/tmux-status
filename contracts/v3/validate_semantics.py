@@ -19,6 +19,7 @@ RECOVERY_FIELDS = (
     "working_directory",
     "resume_command",
 )
+MAX_PROCESS_PID = 2147483647
 
 
 def expected_resume(tool, conversation_id, cwd):
@@ -87,6 +88,11 @@ def validate(payload):
         if pane.get("pane_instance_id") != expected_pane_instance_id:
             errors.append("pane_instance_id does not match pane identity fields")
         for conversation in pane.get("agent_conversations", []):
+            if any(
+                int(pid) > MAX_PROCESS_PID
+                for pid in conversation.get("process_instances", {})
+            ):
+                errors.append("process_instances PID exceeds signed 32-bit range")
             entry = {field: conversation[field] for field in RECOVERY_FIELDS}
             entry.update(
                 tmux_target=pane["tmux_target"],
@@ -104,9 +110,11 @@ def validate(payload):
                     tool, conversation_id
                 ):
                     errors.append("stable_mapping_key does not match tool and ID")
-                if not isinstance(cwd, str) or conversation.get(
-                    "resume_command"
-                ) != expected_resume(tool, conversation_id, cwd):
+                if not isinstance(cwd, str) or not cwd:
+                    errors.append("confirmed working_directory must be nonempty")
+                elif conversation.get("resume_command") != expected_resume(
+                    tool, conversation_id, cwd
+                ):
                     errors.append("resume_command does not match tool, ID, and cwd")
     if recovery != projected:
         errors.append("recovery is not the ordered pane conversation projection")

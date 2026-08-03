@@ -245,6 +245,25 @@ class TmuxStatusTests(unittest.TestCase):
             )
         )
 
+    def test_python_wrapper_consumes_value_taking_interpreter_options(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        arguments = [
+            "python3",
+            "-X",
+            "dev",
+            "-W",
+            "ignore",
+            "-m",
+            "codex",
+            "resume",
+            codex_id,
+        ]
+        self.assertEqual(
+            (codex_id, "cli_resume_argument"),
+            tmux_status.session_id_from_arguments("codex", arguments),
+        )
+        self.assertEqual("codex", tmux_status.tool_for_arguments(arguments))
+
     def test_tool_detection_supports_versioned_grok_binary(self):
         process = tmux_status.ProcessInfo(
             1,

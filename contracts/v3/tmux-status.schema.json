@@ -195,7 +195,7 @@
                   ]
                 },
                 "stable_mapping_key": { "type": "string", "minLength": 1 },
-                "working_directory": { "type": "string" },
+                "working_directory": { "type": "string", "minLength": 1 },
                 "resume_command": { "type": "string", "minLength": 1 }
               }
             },
@@ -231,7 +231,7 @@
         "window": { "type": "string" },
         "pane": { "type": "string", "pattern": "^%[0-9]+$" },
         "target": { "type": "string" },
-        "pid": { "type": "integer", "minimum": 1 },
+        "pid": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
         "command": { "type": "string" },
         "path": { "type": "string" },
         "attached": { "type": "boolean" },
@@ -264,7 +264,7 @@
         "tmux_window_name": { "type": "string" },
         "tmux_pane_index": { "type": "integer", "minimum": 0 },
         "pane_id": { "type": "string", "pattern": "^%[0-9]+$" },
-        "pane_pid": { "type": "integer", "minimum": 1 },
+        "pane_pid": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
         "working_directory": { "type": "string" },
         "agent_conversations": {
           "type": "array",
@@ -293,7 +293,7 @@
         "tmux_target": { "type": "string" },
         "tmux_session_name": { "type": "string" },
         "pane_id": { "type": "string" },
-        "pane_pid": { "type": "integer", "minimum": 1 },
+        "pane_pid": { "type": "integer", "minimum": 1, "maximum": 2147483647 },
         "process_instances": { "$ref": "#/$defs/processInstances" },
         "working_directory": { "type": ["string", "null"] },
         "resume_command": { "type": ["string", "null"] }
@@ -340,7 +340,7 @@
                 ]
               },
               "stable_mapping_key": { "type": "string", "minLength": 1 },
-              "working_directory": { "type": "string" },
+              "working_directory": { "type": "string", "minLength": 1 },
               "resume_command": { "type": "string", "minLength": 1 }
             }
           },
