@@ -171,6 +171,18 @@
           }
         },
         {
+          "if": {
+            "properties": { "identity_source": { "const": "open_session_file" } },
+            "required": ["identity_source"]
+          },
+          "then": {
+            "properties": {
+              "source_path": { "type": "string", "minLength": 1, "pattern": "^/" }
+            }
+          },
+          "else": { "properties": { "source_path": { "type": "null" } } }
+        },
+        {
           "oneOf": [
             {
               "allOf": [
@@ -326,6 +338,18 @@
               "conversation_id_kind": { "const": "grok_session_id" }
             }
           }
+        },
+        {
+          "if": {
+            "properties": { "identity_source": { "const": "open_session_file" } },
+            "required": ["identity_source"]
+          },
+          "then": {
+            "properties": {
+              "source_path": { "type": "string", "minLength": 1, "pattern": "^/" }
+            }
+          },
+          "else": { "properties": { "source_path": { "type": "null" } } }
         },
         {
           "if": { "properties": { "conversation_id_status": { "const": "confirmed" } } },

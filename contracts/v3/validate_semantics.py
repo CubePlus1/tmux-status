@@ -29,20 +29,39 @@ def expected_resume(tool, conversation_id, cwd):
     return "grok --cwd {} --resume {}".format(shlex.quote(cwd), conversation_id)
 
 
-def contains_nul(value):
+def has_unsupported_text(value):
+    index = 0
+    while index < len(value):
+        code_point = ord(value[index])
+        if code_point == 0:
+            return True
+        if 0xD800 <= code_point <= 0xDBFF:
+            index += 1
+            if index >= len(value) or not 0xDC00 <= ord(value[index]) <= 0xDFFF:
+                return True
+        elif 0xDC00 <= code_point <= 0xDFFF:
+            return True
+        index += 1
+    return False
+
+
+def contains_unsupported_text(value):
     if isinstance(value, str):
-        return "\0" in value
+        return has_unsupported_text(value)
     if isinstance(value, list):
-        return any(contains_nul(item) for item in value)
+        return any(contains_unsupported_text(item) for item in value)
     if isinstance(value, dict):
-        return any("\0" in key or contains_nul(item) for key, item in value.items())
+        return any(
+            has_unsupported_text(key) or contains_unsupported_text(item)
+            for key, item in value.items()
+        )
     return False
 
 
 def validate(payload):
     errors = []
-    if contains_nul(payload):
-        errors.append("string fields cannot contain NUL")
+    if contains_unsupported_text(payload):
+        errors.append("string fields cannot contain NUL or unpaired surrogates")
     seen_process_instances = set()
     process_instance_by_pid = {}
     seen_pane_ids = set()
@@ -132,6 +151,19 @@ def validate(payload):
             errors.append("dead pane cannot contain agent conversations")
         for conversation in conversations:
             conversation_tools.add(conversation.get("tool"))
+            identity_source = conversation.get("identity_source")
+            source_path = conversation.get("source_path")
+            if identity_source == "open_session_file":
+                if (
+                    not isinstance(source_path, str)
+                    or not source_path
+                    or not Path(source_path).is_absolute()
+                ):
+                    errors.append(
+                        "open_session_file identity requires an absolute source_path"
+                    )
+            elif source_path is not None:
+                errors.append("non-file identity requires a null source_path")
             for pid, instance_key in conversation.get(
                 "process_instances", {}
             ).items():
