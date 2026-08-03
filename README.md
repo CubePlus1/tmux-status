@@ -99,6 +99,8 @@ Evidence is checked in this order:
 
 Recovery commands use the matched process cwd, an explicit CLI cwd, or session
 metadata cwd; they do not substitute the pane cwd for a different agent cwd.
+If none of those process-associated sources is available, recovery stays
+`unknown` and no executable command is emitted.
 
 Codex rollout metadata is read only from its first `session_meta` record. Grok
 IDs are read from the UUID session directory containing the process's open
@@ -118,9 +120,9 @@ If the evidence is missing or conflicting, the report records:
 ```
 
 Only file or CLI evidence associated with the current process can confirm an
-ID. A PID is never converted into or used to guess a conversation ID. Resolve every
-`unknown` entry manually before shutdown. Confirmed recovery commands have this
-form and are included verbatim in the pre-restart report:
+ID. A PID is never converted into or used to guess a conversation ID. Resolve
+every `unknown` entry manually before shutdown. Confirmed recovery commands
+have this form and are included verbatim in the pre-restart report:
 
 ```sh
 codex resume -C /path/to/project 019fc5d1-40e4-75a2-89f2-188ae5efb2c4

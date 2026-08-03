@@ -316,6 +316,7 @@ class TmuxStatusTests(unittest.TestCase):
                 [process],
                 open_paths=lambda _pid: [path],
                 scrollback=lambda _pane_id: "",
+                working_directory=lambda _pid: "/tmp/my project",
             )
         self.assertEqual(1, len(conversations))
         conversation = conversations[0]
@@ -360,6 +361,7 @@ class TmuxStatusTests(unittest.TestCase):
                 [wrapper, binary],
                 open_paths=lambda pid: [rollout] if pid == 102 else [],
                 scrollback=lambda _pane_id: "",
+                working_directory=lambda _pid: "/tmp/project",
             )
         self.assertEqual(1, len(conversations))
         self.assertEqual("open_session_file", conversations[0].identity_source)
@@ -428,6 +430,84 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual([101, 102], conversations[0].process_pids)
         self.assertEqual("/agent/project", conversations[0].working_directory)
 
+    def test_related_wrapper_and_child_identity_disagreement_is_conflicting(self):
+        wrapper_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        child_id = "019fb21f-84c9-7692-8371-1f9aa3e75401"
+        pane = self.pane()
+        wrapper = tmux_status.ProcessInfo(
+            101,
+            100,
+            0.0,
+            1,
+            "S",
+            "0:01",
+            "node /opt/codex resume {}".format(wrapper_id),
+        )
+        child = tmux_status.ProcessInfo(
+            102, 101, 0.0, 1, "S", "0:01", "/usr/local/bin/codex"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sessions" / "2026" / "08" / "03"
+            path.mkdir(parents=True)
+            rollout = path / "rollout-{}.jsonl".format(child_id)
+            rollout.write_text(
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {"id": child_id, "cwd": "/agent/project"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            conversations = tmux_status.collect_agent_conversations(
+                pane,
+                [wrapper, child],
+                open_paths=lambda pid: [rollout] if pid == child.pid else [],
+                scrollback=lambda _pane_id: "",
+                working_directory=lambda _pid: "/agent/project",
+            )
+
+        self.assertEqual(1, len(conversations))
+        self.assertEqual("unknown", conversations[0].conversation_id_status)
+        self.assertEqual("conflicting_evidence", conversations[0].identity_source)
+        self.assertEqual([101, 102], conversations[0].process_pids)
+        self.assertIn("related PIDs", conversations[0].evidence)
+
+    def test_identity_without_process_associated_cwd_remains_unknown(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane("/pane/project")
+        process = tmux_status.ProcessInfo(
+            101,
+            100,
+            0.0,
+            1,
+            "S",
+            "0:01",
+            "codex resume {}".format(codex_id),
+        )
+        conversations = tmux_status.collect_agent_conversations(
+            pane,
+            [process],
+            open_paths=lambda _pid: [],
+            scrollback=lambda _pane_id: "",
+            working_directory=lambda _pid: None,
+        )
+
+        self.assertEqual(1, len(conversations))
+        self.assertEqual("unknown", conversations[0].conversation_id_status)
+        self.assertEqual("unavailable", conversations[0].identity_source)
+        self.assertIsNone(conversations[0].conversation_id)
+        self.assertIsNone(conversations[0].resume_command)
+        self.assertIn(
+            "no process-associated working directory", conversations[0].evidence
+        )
+
+    def test_linux_process_start_time_handles_spaces_in_comm(self):
+        fields_after_comm = ["S"] + [str(field) for field in range(4, 23)]
+        stat_text = "101 (codex worker) {}".format(" ".join(fields_after_comm))
+        self.assertEqual("22", tmux_status.linux_process_start_time(stat_text))
+
     def test_unmatched_process_remains_unknown_beside_confirmed_conversation(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
         pane = self.pane()
@@ -448,6 +528,7 @@ class TmuxStatusTests(unittest.TestCase):
             [confirmed, unmatched],
             open_paths=lambda _pid: [],
             scrollback=lambda _pane_id: "",
+            working_directory=lambda _pid: "/tmp/project",
         )
 
         self.assertEqual(2, len(conversations))
@@ -633,6 +714,7 @@ class TmuxStatusTests(unittest.TestCase):
                 tree,
                 open_paths=lambda _pid: [],
                 scrollback=lambda _pane_id: "",
+                working_directory=lambda _pid: "/tmp/project",
             ),
         )
         args = tmux_status.build_parser().parse_args(["recovery"])

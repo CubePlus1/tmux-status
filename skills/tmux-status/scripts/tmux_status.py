@@ -658,14 +658,22 @@ def process_working_directory(pid: int) -> Optional[str]:
     return None
 
 
+def linux_process_start_time(stat_text: str) -> Optional[str]:
+    comm_end = stat_text.rfind(")")
+    if comm_end < 0:
+        return None
+    fields_after_comm = stat_text[comm_end + 1 :].split()
+    return fields_after_comm[19] if len(fields_after_comm) > 19 else None
+
+
 def process_instance_key(pid: int) -> str:
     proc_stat = Path("/proc") / str(pid) / "stat"
     boot_id_path = Path("/proc/sys/kernel/random/boot_id")
     try:
-        stat_fields = proc_stat.read_text(encoding="utf-8").split()
+        start_time = linux_process_start_time(proc_stat.read_text(encoding="utf-8"))
         boot_id = boot_id_path.read_text(encoding="utf-8").strip()
-        if len(stat_fields) > 21 and boot_id:
-            return "{}:{}:{}".format(pid, boot_id, stat_fields[21])
+        if start_time and boot_id:
+            return "{}:{}:{}".format(pid, boot_id, start_time)
     except OSError:
         pass
 
@@ -795,6 +803,21 @@ def append_unknown_conversations(
         )
 
 
+def process_is_ancestor(
+    ancestor_pid: int,
+    descendant_pid: int,
+    processes_by_pid: Dict[int, ProcessInfo],
+) -> bool:
+    current = processes_by_pid.get(descendant_pid)
+    seen = set()
+    while current and current.pid not in seen:
+        seen.add(current.pid)
+        if current.ppid == ancestor_pid:
+            return True
+        current = processes_by_pid.get(current.ppid)
+    return False
+
+
 def collect_agent_conversations(
     pane: PaneInfo,
     tree: List[ProcessInfo],
@@ -816,19 +839,24 @@ def collect_agent_conversations(
     processes_by_pid = {process.pid: process for process in tree}
     for tool, matching_processes in sorted(tool_processes.items()):
         process_cwds = {}
+        process_cwds_confirmed = {}
         process_keys = {}
         for process in matching_processes:
-            observed_cwd = working_directory(process.pid) or pane.current_path
+            observed_cwd = working_directory(process.pid)
+            command_cwd = working_directory_from_command(tool, process.command)
             process_cwds[process.pid] = resolve_working_directory(
-                working_directory_from_command(tool, process.command),
-                observed_cwd,
+                command_cwd,
+                observed_cwd or pane.current_path,
             )
+            process_cwds_confirmed[process.pid] = bool(command_cwd or observed_cwd)
             process_keys[process.pid] = instance_key(process.pid)
 
         confirmed: Dict[Tuple[str, str], dict] = {}
         conflicts = []
+        unavailable_reasons = []
         unresolved_pids = []
         conflicting_pids = []
+        unavailable_pids = []
         for process in matching_processes:
             command_evidence = session_id_from_command(tool, process.command)
             file_evidence: Dict[str, Tuple[str, Optional[str]]] = {}
@@ -852,6 +880,14 @@ def collect_agent_conversations(
                 cwd = resolve_working_directory(
                     metadata_cwd, process_cwds[process.pid]
                 )
+                if not metadata_cwd and not process_cwds_confirmed[process.pid]:
+                    unavailable_reasons.append(
+                        "PID {} has a session UUID but no process-associated working directory".format(
+                            process.pid
+                        )
+                    )
+                    unavailable_pids.append(process.pid)
+                    continue
                 entry = confirmed.setdefault(
                     (session_id, cwd),
                     {
@@ -873,6 +909,14 @@ def collect_agent_conversations(
                 continue
 
             if command_evidence:
+                if not process_cwds_confirmed[process.pid]:
+                    unavailable_reasons.append(
+                        "PID {} has a CLI UUID but no process-associated working directory".format(
+                            process.pid
+                        )
+                    )
+                    unavailable_pids.append(process.pid)
+                    continue
                 session_id, source = command_evidence
                 cwd = process_cwds[process.pid]
                 entry = confirmed.setdefault(
@@ -882,6 +926,29 @@ def collect_agent_conversations(
                 entry["pids"].append(process.pid)
                 continue
             unresolved_pids.append(process.pid)
+
+        confirmed_by_pid = {
+            pid: key
+            for key, entry in confirmed.items()
+            for pid in entry["pids"]
+        }
+        conflicting_keys = set()
+        confirmed_items = sorted(confirmed_by_pid.items())
+        for index, (left_pid, left_key) in enumerate(confirmed_items):
+            for right_pid, right_key in confirmed_items[index + 1 :]:
+                if left_key == right_key:
+                    continue
+                if process_is_ancestor(
+                    left_pid, right_pid, processes_by_pid
+                ) or process_is_ancestor(right_pid, left_pid, processes_by_pid):
+                    conflicting_keys.update((left_key, right_key))
+                    conflicts.append(
+                        "related PIDs {} and {} disagree on session identity or working directory".format(
+                            left_pid, right_pid
+                        )
+                    )
+        for key in conflicting_keys:
+            conflicting_pids.extend(confirmed.pop(key)["pids"])
 
         remaining_unresolved = []
         for unresolved_pid in unresolved_pids:
@@ -918,8 +985,8 @@ def collect_agent_conversations(
                         evidence["path"],
                     )
                 )
-            if conflicts or unresolved_pids:
-                evidence_parts = list(conflicts)
+            if conflicts or unavailable_reasons or unresolved_pids:
+                evidence_parts = list(conflicts) + unavailable_reasons
                 if unresolved_pids:
                     evidence_parts.append(
                         "no explicit UUID found for {} process(es)".format(
@@ -929,7 +996,9 @@ def collect_agent_conversations(
                 append_unknown_conversations(
                     conversations,
                     tool,
-                    sorted(conflicting_pids + unresolved_pids),
+                    sorted(
+                        set(conflicting_pids + unavailable_pids + unresolved_pids)
+                    ),
                     process_cwds,
                     process_keys,
                     "; ".join(evidence_parts),
@@ -937,9 +1006,9 @@ def collect_agent_conversations(
                 )
             continue
 
-        if conflicts:
+        if conflicts or unavailable_reasons:
             if unresolved_pids:
-                conflicts.append(
+                unavailable_reasons.append(
                     "no explicit UUID found for {} process(es)".format(
                         len(unresolved_pids)
                     )
@@ -947,11 +1016,11 @@ def collect_agent_conversations(
             append_unknown_conversations(
                 conversations,
                 tool,
-                sorted(conflicting_pids + unresolved_pids),
+                sorted(set(conflicting_pids + unavailable_pids + unresolved_pids)),
                 process_cwds,
                 process_keys,
-                "; ".join(conflicts),
-                "conflicting_evidence",
+                "; ".join(conflicts + unavailable_reasons),
+                "conflicting_evidence" if conflicts else "unavailable",
             )
             continue
 

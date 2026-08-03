@@ -82,6 +82,8 @@ found only in tmux scrollback remains diagnostic and unknown. Do not infer an ID
 PID, working directory, title, or most-recent session. If
 `conversation_id_status` is `unknown`, preserve `unknown` in the result and tell
 the user that automatic resume is unavailable for that entry.
+Never emit a confirmed recovery command using pane cwd as a fallback when the
+process, CLI, and session metadata do not provide an associated cwd.
 
 ## Prepare for Restart
 
