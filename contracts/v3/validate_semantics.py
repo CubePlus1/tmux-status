@@ -33,6 +33,8 @@ def validate(payload):
     errors = []
     seen_process_instances = set()
     process_instance_by_pid = {}
+    seen_pane_ids = set()
+    seen_pane_instance_ids = set()
     panes = payload.get("panes", [])
     recovery = payload.get("recovery", [])
     producer = payload.get("producer", {})
@@ -60,6 +62,14 @@ def validate(payload):
 
     projected = []
     for pane in panes:
+        pane_id = pane.get("pane_id")
+        pane_instance = pane.get("pane_instance_id")
+        if pane_id in seen_pane_ids:
+            errors.append("pane_id is reused within the report")
+        seen_pane_ids.add(pane_id)
+        if pane_instance in seen_pane_instance_ids:
+            errors.append("pane_instance_id is reused within the report")
+        seen_pane_instance_ids.add(pane_instance)
         if pane.get("session_created", 0) > MAX_SAFE_INTEGER:
             errors.append("session_created exceeds safe database integer range")
         legacy_aliases = (
@@ -100,6 +110,7 @@ def validate(payload):
         if pane.get("pane_instance_id") != expected_pane_instance_id:
             errors.append("pane_instance_id does not match pane identity fields")
         conversations = pane.get("agent_conversations", [])
+        seen_confirmed_mappings = set()
         if pane.get("dead") and conversations:
             errors.append("dead pane cannot contain agent conversations")
         for conversation in conversations:
@@ -135,6 +146,12 @@ def validate(payload):
             if status == "confirmed":
                 tool = conversation.get("tool")
                 conversation_id = conversation.get("conversation_id")
+                confirmed_mapping = (tool, conversation_id)
+                if confirmed_mapping in seen_confirmed_mappings:
+                    errors.append(
+                        "confirmed conversation mapping is duplicated within a pane"
+                    )
+                seen_confirmed_mappings.add(confirmed_mapping)
                 cwd = conversation.get("working_directory")
                 if conversation.get("stable_mapping_key") != "{}:{}".format(
                     tool, conversation_id

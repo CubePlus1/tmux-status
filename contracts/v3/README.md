@@ -14,6 +14,7 @@ Rules:
 - Every conversation records its own `working_directory`; pane cwd is never substituted for a different agent cwd, and missing process-associated cwd keeps recovery unknown.
 - Dead panes never contain agent conversations or recovery commands.
 - `process_instances` maps each signed 32-bit agent PID to exactly one `<pid>:<nonempty-incarnation>` start identity across the whole report, and neither a PID nor a process incarnation can be reused by multiple conversations; it is never conversation-ID evidence.
+- `pane_id` and `pane_instance_id` are unique within a report, and a confirmed conversation mapping appears at most once per pane.
 - Missing or conflicting evidence is `unknown` with null ID/key/command.
 - PID, cwd, pane title, and recency are never identity evidence.
 - Payloads contain no prompt, response, reasoning, or pane content.

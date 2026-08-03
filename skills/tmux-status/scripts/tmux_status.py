@@ -788,9 +788,11 @@ def configured_session_root(
     tool: str, process_environment: Optional[Dict[str, str]] = None
 ) -> Optional[Path]:
     environment_key = "CODEX_HOME" if tool == "codex" else "GROK_HOME"
-    configured_home = (process_environment or {}).get(environment_key)
-    if not configured_home:
-        configured_home = os.environ.get(environment_key)
+    configured_home = (
+        os.environ.get(environment_key)
+        if process_environment is None
+        else process_environment.get(environment_key)
+    )
     if configured_home:
         data_root = Path(configured_home).expanduser()
     elif tool == "codex":
@@ -1431,7 +1433,20 @@ def collect_agent_conversations(
                 if process_cwds_confirmed[process.pid]:
                     cwd = process_cwds[process.pid]
                 elif metadata_cwd:
-                    cwd = resolve_working_directory(metadata_cwd, pane.current_path)
+                    resolved_metadata_cwd = resolve_working_directory(
+                        metadata_cwd, pane.current_path
+                    )
+                    if not os.path.isdir(resolved_metadata_cwd) or not os.access(
+                        resolved_metadata_cwd, os.X_OK
+                    ):
+                        unavailable_reasons.append(
+                            "PID {} session metadata working directory is unavailable".format(
+                                process.pid
+                            )
+                        )
+                        unavailable_pids.append(process.pid)
+                        continue
+                    cwd = resolved_metadata_cwd
                 else:
                     unavailable_reasons.append(
                         "PID {} has a session UUID but no process-associated working directory".format(

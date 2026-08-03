@@ -652,6 +652,23 @@ class TmuxStatusTests(unittest.TestCase):
 
         self.assertEqual({"CODEX_HOME": "/tmp/Custom Codex"}, environment)
 
+    def test_empty_process_environment_uses_agent_default_home(self):
+        with patch.dict(
+            tmux_status.os.environ,
+            {"CODEX_HOME": "/reporter/custom-codex"},
+        ):
+            with patch.object(
+                tmux_status.Path, "home", return_value=Path("/agent-home")
+            ):
+                self.assertEqual(
+                    Path("/agent-home/.codex/sessions"),
+                    tmux_status.configured_session_root("codex", {}),
+                )
+                self.assertEqual(
+                    Path("/reporter/custom-codex/sessions"),
+                    tmux_status.configured_session_root("codex", None),
+                )
+
     def test_open_session_file_has_priority_over_wrapper_resume_argument(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
         pane = self.pane()
@@ -827,6 +844,47 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual("confirmed", conversations[0].conversation_id_status)
         self.assertEqual("/new", conversations[0].working_directory)
         self.assertIn("-C /new", conversations[0].resume_command)
+
+    def test_unusable_session_metadata_cwd_keeps_mapping_unknown(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane("/pane/project")
+        process = tmux_status.ProcessInfo(
+            101, 100, 0.0, 1, "S", "0:01", "/usr/local/bin/codex"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sessions" / "2026" / "08" / "03"
+            path.mkdir(parents=True)
+            rollout = path / "rollout-{}.jsonl".format(codex_id)
+            rollout.write_text(
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {
+                            "id": codex_id,
+                            "cwd": str(Path(directory) / "deleted-project"),
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            conversations = tmux_status.collect_agent_conversations(
+                pane,
+                [process],
+                open_paths=lambda _pid: [rollout],
+                scrollback=lambda _pane_id: "",
+                working_directory=lambda _pid: None,
+                session_roots={"codex": Path(directory) / "sessions"},
+            )
+
+        self.assertEqual(1, len(conversations))
+        self.assertEqual("unknown", conversations[0].conversation_id_status)
+        self.assertIsNone(conversations[0].conversation_id)
+        self.assertIsNone(conversations[0].resume_command)
+        self.assertIn(
+            "metadata working directory is unavailable",
+            conversations[0].evidence,
+        )
 
     def test_runtime_wrapper_folds_into_confirmed_child_invocation(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"

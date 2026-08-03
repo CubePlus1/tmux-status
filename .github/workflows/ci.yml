@@ -60,6 +60,8 @@ jobs:
             '.panes[0].agent_conversations[0].process_instances = {"101":"101:"}' \
             '.panes[0].agent_conversations += [.panes[0].agent_conversations[0] | .process_instances = {"101":"101:different"}] | .recovery += [.recovery[0] | .process_instances = {"101":"101:different"}] | .confirmed_conversation_count = 2' \
             '.panes[0].agent_conversations += [.panes[0].agent_conversations[0]] | .recovery += [.recovery[0]] | .confirmed_conversation_count = 2' \
+            '.panes[0].agent_conversations += [.panes[0].agent_conversations[0] | .process_instances = {"102":"102:second"}] | .recovery += [.recovery[0] | .process_instances = {"102":"102:second"}] | .confirmed_conversation_count = 2' \
+            '.panes += [.panes[0] | .agent_conversations = []] | .pane_count = 2' \
             '.panes[0].dead = true' \
             '.panes[0].agent_conversations[0].working_directory = ""'; do
             if jq "$mutation" fixtures/confirmed.json | \
