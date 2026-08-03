@@ -66,8 +66,8 @@ For every detected Codex or Grok process, keep the full mapping found in
 
 - `tmux_session_name`, `tmux_window_index`, and `tmux_pane_index`;
 - `pane_id` and `pane_pid`;
-- agent `process_pids`, one process-incarnation `process_instance_keys` entry
-  per PID, and the conversation-specific `working_directory`;
+- a `process_instances` map from each agent PID to exactly one
+  process-incarnation key, and the conversation-specific `working_directory`;
 - `conversation_id_kind`, `conversation_id`, `conversation_id_status`,
   `identity_source`, and `source_path`;
 - `stable_mapping_key` and `resume_command`.

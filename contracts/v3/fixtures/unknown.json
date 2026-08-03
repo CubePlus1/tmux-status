@@ -25,8 +25,7 @@
       "tmux_session_name": "work",
       "pane_id": "%3",
       "pane_pid": 100,
-      "process_pids": [102],
-      "process_instance_keys": ["102:Mon Aug 3 12:01:00 2026"],
+      "process_instances": {"102": "102:Mon Aug 3 12:01:00 2026"},
       "working_directory": "/tmp/project",
       "resume_command": null
     }
@@ -51,8 +50,7 @@
           "conversation_id_status": "unknown", "conversation_id_kind": "grok_session_id",
           "identity_source": "unavailable", "source_path": null,
           "working_directory": "/tmp/project",
-          "process_pids": [102],
-          "process_instance_keys": ["102:Mon Aug 3 12:01:00 2026"],
+          "process_instances": {"102": "102:Mon Aug 3 12:01:00 2026"},
           "stable_mapping_key": null, "resume_command": null,
           "evidence": "no explicit UUID found"
         }

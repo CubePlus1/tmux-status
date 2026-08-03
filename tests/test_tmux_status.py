@@ -263,6 +263,7 @@ class TmuxStatusTests(unittest.TestCase):
         commands = (
             "codex resume -i image.png {}".format(codex_id),
             "codex resume -i one.png two.png {}".format(codex_id),
+            "codex -i one.png two.png resume {}".format(codex_id),
             "codex resume --enable feature {}".format(codex_id),
             "codex resume --add-dir /tmp/extra {}".format(codex_id),
             "codex --model gpt-test resume --profile work {}".format(codex_id),
@@ -334,7 +335,7 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual("confirmed", conversation.conversation_id_status)
         self.assertEqual("open_session_file", conversation.identity_source)
         self.assertEqual("grok:{}".format(grok_id), conversation.stable_mapping_key)
-        self.assertEqual([101], conversation.process_pids)
+        self.assertEqual({"101"}, set(conversation.process_instances))
         self.assertEqual(
             "grok --cwd '/tmp/my project' --resume {}".format(grok_id),
             conversation.resume_command,
@@ -376,7 +377,7 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual(1, len(conversations))
         self.assertEqual("open_session_file", conversations[0].identity_source)
         self.assertEqual(str(rollout), conversations[0].source_path)
-        self.assertEqual([101, 102], conversations[0].process_pids)
+        self.assertEqual({"101", "102"}, set(conversations[0].process_instances))
 
     def test_confirmed_conversation_uses_agent_working_directory(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
@@ -547,7 +548,7 @@ class TmuxStatusTests(unittest.TestCase):
 
         self.assertEqual(1, len(conversations))
         self.assertEqual("confirmed", conversations[0].conversation_id_status)
-        self.assertEqual([101, 102], conversations[0].process_pids)
+        self.assertEqual({"101", "102"}, set(conversations[0].process_instances))
         self.assertEqual("/process/project", conversations[0].working_directory)
 
     def test_unresolved_child_folds_into_confirmed_wrapper_invocation(self):
@@ -581,7 +582,7 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual(1, len(conversations))
         self.assertEqual("confirmed", conversations[0].conversation_id_status)
         self.assertEqual(codex_id, conversations[0].conversation_id)
-        self.assertEqual([101, 102], conversations[0].process_pids)
+        self.assertEqual({"101", "102"}, set(conversations[0].process_instances))
 
     def test_related_wrapper_and_child_identity_disagreement_is_conflicting(self):
         wrapper_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
@@ -624,7 +625,7 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual(1, len(conversations))
         self.assertEqual("unknown", conversations[0].conversation_id_status)
         self.assertEqual("conflicting_evidence", conversations[0].identity_source)
-        self.assertEqual([101, 102], conversations[0].process_pids)
+        self.assertEqual({"101", "102"}, set(conversations[0].process_instances))
         self.assertIn("disagree on session identity", conversations[0].evidence)
 
     def test_wrapper_and_child_same_identity_use_native_child_cwd(self):
@@ -663,7 +664,7 @@ class TmuxStatusTests(unittest.TestCase):
 
         self.assertEqual(1, len(conversations))
         self.assertEqual("confirmed", conversations[0].conversation_id_status)
-        self.assertEqual([101, 102], conversations[0].process_pids)
+        self.assertEqual({"101", "102"}, set(conversations[0].process_instances))
         self.assertEqual("/project", conversations[0].working_directory)
 
     def test_nested_native_tool_processes_keep_independent_identities(self):
@@ -772,9 +773,9 @@ class TmuxStatusTests(unittest.TestCase):
 
         self.assertEqual(2, len(conversations))
         self.assertEqual("confirmed", conversations[0].conversation_id_status)
-        self.assertEqual([101], conversations[0].process_pids)
+        self.assertEqual({"101"}, set(conversations[0].process_instances))
         self.assertEqual("unknown", conversations[1].conversation_id_status)
-        self.assertEqual([102], conversations[1].process_pids)
+        self.assertEqual({"102"}, set(conversations[1].process_instances))
         self.assertIsNone(conversations[1].conversation_id)
 
     def test_unknown_id_is_explicit_and_never_guessed_from_pid(self):
@@ -795,7 +796,8 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertIsNone(conversations[0].stable_mapping_key)
         self.assertIsNone(conversations[0].resume_command)
         self.assertEqual(
-            ["98765:process-start-a"], conversations[0].process_instance_keys
+            {"98765": "98765:process-start-a"},
+            conversations[0].process_instances,
         )
         self.assertNotIn("98765", conversations[0].evidence)
 
@@ -938,7 +940,7 @@ class TmuxStatusTests(unittest.TestCase):
 
         self.assertEqual(1, len(conversations))
         self.assertEqual("unknown", conversations[0].conversation_id_status)
-        self.assertEqual([101, 102], conversations[0].process_pids)
+        self.assertEqual({"101", "102"}, set(conversations[0].process_instances))
         self.assertIsNone(conversations[0].conversation_id)
 
     def test_human_status_and_watch_skip_conversation_collection(self):
@@ -1025,6 +1027,12 @@ class TmuxStatusTests(unittest.TestCase):
                         self.assertIn(key, pane)
                     for conversation in pane["agent_conversations"]:
                         self.assertIsInstance(conversation["working_directory"], str)
+                        self.assertTrue(conversation["process_instances"])
+                        for pid, instance_key in conversation[
+                            "process_instances"
+                        ].items():
+                            self.assertGreater(int(pid), 0)
+                            self.assertTrue(instance_key)
                         if conversation["conversation_id_status"] == "unknown":
                             self.assertIsNone(conversation["conversation_id"])
                             self.assertIsNone(conversation["stable_mapping_key"])

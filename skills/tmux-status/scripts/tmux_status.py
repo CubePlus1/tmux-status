@@ -119,8 +119,7 @@ class AgentConversation:
     identity_source: str
     source_path: Optional[str]
     working_directory: str
-    process_pids: List[int]
-    process_instance_keys: List[str]
+    process_instances: Dict[str, str]
     stable_mapping_key: Optional[str]
     resume_command: Optional[str]
     evidence: str
@@ -565,6 +564,18 @@ def codex_subcommand_arguments(arguments: List[str], subcommand: str) -> Optiona
         token = arguments[index]
         if token == "--":
             return None
+        if token in CODEX_MULTI_VALUE_OPTIONS or any(
+            token.startswith(option + "=") for option in CODEX_MULTI_VALUE_OPTIONS
+        ):
+            index += 1
+            while index < len(arguments):
+                candidate = arguments[index]
+                if candidate == subcommand:
+                    return arguments[index + 1 :]
+                if candidate.startswith("-"):
+                    break
+                index += 1
+            continue
         if token in CODEX_VALUE_OPTIONS:
             index += 2
             continue
@@ -834,8 +845,7 @@ def confirmed_conversation(
         identity_source=source,
         source_path=source_path,
         working_directory=cwd,
-        process_pids=[pid for pid, _key in processes],
-        process_instance_keys=[key for _pid, key in processes],
+        process_instances={str(pid): key for pid, key in processes},
         stable_mapping_key="{}:{}".format(tool, conversation_id),
         resume_command=resume_command(tool, conversation_id, cwd),
         evidence="explicit UUID from {}".format(source),
@@ -859,8 +869,7 @@ def unknown_conversation(
         identity_source=identity_source,
         source_path=None,
         working_directory=cwd,
-        process_pids=[pid for pid, _key in processes],
-        process_instance_keys=[key for _pid, key in processes],
+        process_instances={str(pid): key for pid, key in processes},
         stable_mapping_key=None,
         resume_command=None,
         evidence=evidence,
@@ -1487,8 +1496,7 @@ def recovery_entries(statuses: List[PaneStatus]) -> List[dict]:
                     "tmux_session_name": status.tmux_session_name,
                     "pane_id": status.pane_id,
                     "pane_pid": status.pane_pid,
-                    "process_pids": conversation.process_pids,
-                    "process_instance_keys": conversation.process_instance_keys,
+                    "process_instances": conversation.process_instances,
                     "working_directory": conversation.working_directory,
                     "resume_command": conversation.resume_command,
                 }
@@ -1614,10 +1622,10 @@ def render_markdown(payload: dict) -> str:
                         markdown_code(conversation["conversation_id_status"])
                     ),
                     "  - agent PID(s): {}".format(
-                        ", ".join(str(pid) for pid in conversation["process_pids"])
+                        ", ".join(conversation["process_instances"].keys())
                     ),
                     "  - process instance key(s): {}".format(
-                        ", ".join(conversation["process_instance_keys"])
+                        ", ".join(conversation["process_instances"].values())
                     ),
                     "  - identity source: {}".format(
                         markdown_code(conversation["identity_source"])

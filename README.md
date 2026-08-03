@@ -72,8 +72,8 @@ For every detected Codex or Grok process, JSON and Markdown reports record the
 agent conversation separately from tmux identity:
 
 - `tmux_session_name`, `tmux_window_index`, `tmux_pane_index`, and `pane_id`;
-- the pane root `pane_pid`, agent `process_pids`, one process-incarnation
-  `process_instance_keys` entry per PID, and each conversation's own
+- the pane root `pane_pid`, a `process_instances` map from each agent PID to
+  exactly one process-incarnation key, and each conversation's own
   `working_directory`;
 - `codex_thread_id` or `grok_session_id` in `conversation_id_kind`;
 - the verified UUID in `conversation_id`, its evidence source, and source path;
