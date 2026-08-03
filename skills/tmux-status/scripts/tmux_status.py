@@ -828,6 +828,18 @@ def session_metadata_from_open_file(
     if tool == "grok":
         if source_path.name not in SESSION_FILE_NAMES["grok"]:
             return None
+        try:
+            with opened_file.read_path.open("rb") as session_file:
+                opened_stat = os.fstat(session_file.fileno())
+                if (
+                    opened_file.inode is not None
+                    and opened_stat.st_ino != opened_file.inode
+                ):
+                    return None
+                if os.fstat(session_file.fileno()).st_ino != opened_stat.st_ino:
+                    return None
+        except OSError:
+            return None
         session_id = validated_uuid(source_path.parent.name)
         return (session_id, None) if session_id else None
 

@@ -31,6 +31,7 @@ def expected_resume(tool, conversation_id, cwd):
 
 def validate(payload):
     errors = []
+    seen_process_instances = set()
     panes = payload.get("panes", [])
     recovery = payload.get("recovery", [])
     producer = payload.get("producer", {})
@@ -100,6 +101,10 @@ def validate(payload):
                     )
                 if not instance_key.startswith(pid + ":"):
                     errors.append("process instance key does not match its PID")
+                process_instance = (pid, instance_key)
+                if process_instance in seen_process_instances:
+                    errors.append("process instance is reused across conversations")
+                seen_process_instances.add(process_instance)
             entry = {field: conversation[field] for field in RECOVERY_FIELDS}
             entry.update(
                 tmux_target=pane["tmux_target"],

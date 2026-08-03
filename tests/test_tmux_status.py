@@ -502,6 +502,30 @@ class TmuxStatusTests(unittest.TestCase):
                     ),
                 )
 
+    def test_grok_metadata_requires_the_captured_descriptor_identity(self):
+        grok_id = "019fc532-c5ba-7b90-a199-5ecd6d99bf69"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            events = root / "sessions" / grok_id / "events.jsonl"
+            events.parent.mkdir(parents=True)
+            events.write_text("", encoding="utf-8")
+            original_inode = events.stat().st_ino
+            replacement = root / "replacement.jsonl"
+            replacement.write_text("", encoding="utf-8")
+            switched_descriptor = tmux_status.OpenProcessFile(
+                source_path=events,
+                read_path=replacement,
+                inode=original_inode,
+            )
+
+            self.assertIsNone(
+                tmux_status.session_id_from_open_file(
+                    "grok",
+                    switched_descriptor,
+                    {"grok": root / "sessions"},
+                )
+            )
+
     def test_collects_stable_mapping_from_open_session_file(self):
         grok_id = "019fc532-c5ba-7b90-a199-5ecd6d99bf69"
         pane = self.pane("/tmp/my project")
