@@ -90,7 +90,9 @@ class TmuxStatusTests(unittest.TestCase):
         processes = tmux_status.parse_ps_output(output)
         tree = tmux_status.descendants(100, processes)
         self.assertEqual({100, 101, 102}, {process.pid for process in tree})
-        self.assertEqual(["codex"], tmux_status.detect_tools(tree))
+        self.assertEqual(
+            ["codex"], tmux_status.detect_tools(tree, arguments=lambda _pid: None)
+        )
 
     def test_build_status_aggregates_and_flags(self):
         pane = tmux_status.PaneInfo(
@@ -224,7 +226,10 @@ class TmuxStatusTests(unittest.TestCase):
             ),
             tmux_status.ProcessInfo(3, 0, 0.0, 1, "S", "0:01", "python -m codex run"),
         ]
-        self.assertEqual(["codex", "grok"], tmux_status.detect_tools(processes))
+        self.assertEqual(
+            ["codex", "grok"],
+            tmux_status.detect_tools(processes, arguments=lambda _pid: None),
+        )
         self.assertTrue(
             tmux_status.is_runtime_wrapper_process(
                 tmux_status.ProcessInfo(
@@ -250,7 +255,10 @@ class TmuxStatusTests(unittest.TestCase):
             "0:01",
             "/Users/me/.grok/downloads/grok-0.2.118-macos-aarch64",
         )
-        self.assertEqual(["grok"], tmux_status.detect_tools([process]))
+        self.assertEqual(
+            ["grok"],
+            tmux_status.detect_tools([process], arguments=lambda _pid: None),
+        )
 
     def test_tool_detection_ignores_command_arguments(self):
         processes = [
@@ -262,7 +270,9 @@ class TmuxStatusTests(unittest.TestCase):
             ),
             tmux_status.ProcessInfo(3, 0, 0.0, 1, "S", "0:01", "python -c codex"),
         ]
-        self.assertEqual([], tmux_status.detect_tools(processes))
+        self.assertEqual(
+            [], tmux_status.detect_tools(processes, arguments=lambda _pid: None)
+        )
 
     def test_lossless_argv_classifies_agent_paths_with_spaces(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
