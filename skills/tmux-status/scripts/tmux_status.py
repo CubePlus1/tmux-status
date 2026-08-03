@@ -1588,8 +1588,10 @@ def collect_agent_conversations(
                 if process_cwds_confirmed[process.pid]:
                     cwd = process_cwds[process.pid]
                 elif metadata_cwd:
-                    resolved_metadata_cwd = resolve_working_directory(
-                        metadata_cwd, pane.current_path
+                    resolved_metadata_cwd = (
+                        os.path.normpath(metadata_cwd)
+                        if os.path.isabs(metadata_cwd)
+                        else None
                     )
                     if not usable_working_directory(resolved_metadata_cwd):
                         unavailable_reasons.append(
@@ -2200,6 +2202,27 @@ def recovery_entries(statuses: List[PaneStatus]) -> List[dict]:
     return entries
 
 
+def validate_storage_safe_text(value: object) -> None:
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8", errors="strict")
+        except UnicodeEncodeError as exc:
+            raise TmuxStatusError(
+                "report contains text that is not valid UTF-8"
+            ) from exc
+        if "\x00" in value:
+            raise TmuxStatusError("report contains text with a NUL character")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            validate_storage_safe_text(key)
+            validate_storage_safe_text(item)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            validate_storage_safe_text(item)
+
+
 def status_payload(
     statuses: List[PaneStatus], args: argparse.Namespace, report_type: str = "status"
 ) -> dict:
@@ -2209,7 +2232,7 @@ def status_payload(
         status.server_instance_id != producer_server_id for status in statuses
     ):
         raise TmuxStatusError("tmux panes reported multiple server instances")
-    return {
+    payload = {
         "schema_version": 3,
         "tool_version": VERSION,
         "producer": {"name": "tmux-status", "version": VERSION},
@@ -2233,6 +2256,8 @@ def status_payload(
         "recovery": recovery,
         "panes": [asdict(status) for status in statuses],
     }
+    validate_storage_safe_text(payload)
+    return payload
 
 
 def markdown_code(value: object) -> str:

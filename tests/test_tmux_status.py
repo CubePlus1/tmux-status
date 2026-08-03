@@ -1130,6 +1130,45 @@ class TmuxStatusTests(unittest.TestCase):
             conversations[0].evidence,
         )
 
+    def test_relative_session_metadata_cwd_keeps_mapping_unknown(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        process = tmux_status.ProcessInfo(
+            101, 100, 0.0, 1, "S", "0:01", "/usr/local/bin/codex"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            pane = self.pane(directory)
+            (Path(directory) / "project").mkdir()
+            path = Path(directory) / "sessions" / "2026" / "08" / "03"
+            path.mkdir(parents=True)
+            rollout = path / "rollout-{}.jsonl".format(codex_id)
+            rollout.write_text(
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {"id": codex_id, "cwd": "project"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            conversations = tmux_status.collect_agent_conversations(
+                pane,
+                [process],
+                open_paths=lambda _pid: [rollout],
+                scrollback=lambda _pane_id: "",
+                working_directory=lambda _pid: None,
+                session_roots={"codex": Path(directory) / "sessions"},
+            )
+
+        self.assertEqual(1, len(conversations))
+        self.assertEqual("unknown", conversations[0].conversation_id_status)
+        self.assertIsNone(conversations[0].conversation_id)
+        self.assertIsNone(conversations[0].resume_command)
+        self.assertIn(
+            "metadata working directory is unavailable",
+            conversations[0].evidence,
+        )
+
     def test_runtime_wrapper_folds_into_confirmed_child_invocation(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
         pane = self.pane()
@@ -1903,6 +1942,22 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertIn("codex_thread_id", markdown)
         self.assertIn(codex_id, markdown)
         self.assertIn("codex resume -C /tmp/project {}".format(codex_id), markdown)
+
+    def test_payload_rejects_surrogateescaped_paths(self):
+        pane = self.pane("/tmp/project-\udcff")
+        statuses = tmux_status.build_statuses(
+            [pane],
+            {},
+            {},
+            cpu_threshold=80.0,
+            memory_threshold_mb=1024.0,
+        )
+        args = tmux_status.build_parser().parse_args(["snapshot"])
+        with self.assertRaisesRegex(
+            tmux_status.TmuxStatusError,
+            "not valid UTF-8",
+        ):
+            tmux_status.status_payload(statuses, args, "snapshot")
 
     def test_markdown_code_uses_a_safe_backtick_delimiter(self):
         self.assertEqual("``a`b``", tmux_status.markdown_code("a`b"))
