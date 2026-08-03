@@ -29,6 +29,15 @@ def expected_resume(tool, conversation_id, cwd):
     return "grok --cwd {} --resume {}".format(shlex.quote(cwd), conversation_id)
 
 
+def rounded_threshold_expectation(reported_value, threshold):
+    rounding_radius = 0.05
+    if reported_value - rounding_radius >= threshold:
+        return True
+    if reported_value + rounding_radius < threshold:
+        return False
+    return None
+
+
 def has_unsupported_text(value):
     index = 0
     while index < len(value):
@@ -68,6 +77,7 @@ def validate(payload):
     seen_pane_instance_ids = set()
     panes = payload.get("panes", [])
     recovery = payload.get("recovery", [])
+    thresholds = payload.get("thresholds", {})
     producer = payload.get("producer", {})
     if producer.get("version") != payload.get("tool_version"):
         errors.append("producer.version does not match tool_version")
@@ -93,6 +103,16 @@ def validate(payload):
 
     projected = []
     for pane in panes:
+        anomaly_labels = set(pane.get("anomalies", []))
+        if ("DEAD" in anomaly_labels) != bool(pane.get("dead")):
+            errors.append("DEAD anomaly does not match pane state")
+        for label, metric, threshold in (
+            ("CPU", pane.get("cpu_percent", 0), thresholds.get("cpu_percent", 0)),
+            ("MEM", pane.get("memory_mb", 0), thresholds.get("memory_mb", 0)),
+        ):
+            expectation = rounded_threshold_expectation(metric, threshold)
+            if expectation is not None and (label in anomaly_labels) != expectation:
+                errors.append("{} anomaly does not match rounded threshold".format(label))
         for index_field in ("tmux_window_index", "tmux_pane_index"):
             if pane.get(index_field, 0) > MAX_SAFE_INTEGER:
                 errors.append("{} exceeds safe integer range".format(index_field))

@@ -10,7 +10,8 @@ Rules:
 - `target` and `tmux_target` are derived exactly from the tmux session, window index, and pane index.
 - A confirmed conversation requires process-associated file or CLI evidence, a UUID, nonempty `working_directory`, `stable_mapping_key` derived exactly as `<tool>:<conversation_id>`, and `resume_command`.
 - `pre_restart` is true exactly for `report_type: "recovery"` and false for status or snapshot reports.
-- Indexed tmux identity components use bounded numeric forms, and `generated_at` intentionally excludes RFC 3339 leap-second `:60` values.
+- Indexed tmux identity components use bounded numeric forms. `generated_at` excludes RFC 3339 leap-second `:60` values and permits at most six fractional digits so PostgreSQL preserves snapshot ordering exactly.
+- `DEAD` matches pane state exactly. `CPU` and `MEM` match their thresholds whenever the producer's one-decimal rounding makes the result unambiguous; boundary values within half a rounding unit may validly carry either label state.
 - Every conversation records its own `working_directory`; pane cwd is never substituted for a different agent cwd, and missing process-associated cwd keeps recovery unknown.
 - Dead panes never contain agent conversations or recovery commands.
 - `process_instances` maps each signed 32-bit agent PID to exactly one `<pid>:<nonempty-incarnation>` start identity across the whole report, and neither a PID nor a process incarnation can be reused by multiple conversations; it is never conversation-ID evidence.
