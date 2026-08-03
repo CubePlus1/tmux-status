@@ -22,6 +22,7 @@ cd contracts/v3
 shasum -a 256 -c SHA256SUMS
 uvx --from check-jsonschema==0.33.3 check-jsonschema \
   --schemafile tmux-status.schema.json fixtures/*.json
+python3 validate_semantics.py fixtures/*.json
 ```
 
-Files under `fixtures-invalid/` must fail schema validation.
+Files under `fixtures-invalid/` must fail schema validation. `validate_semantics.py` enforces ordered recovery projection, summary counts, server identity, stable keys, and resume commands that JSON Schema cannot compare across fields.

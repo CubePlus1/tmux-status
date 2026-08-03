@@ -43,6 +43,12 @@ jobs:
           shasum -a 256 -c SHA256SUMS
           uvx --from check-jsonschema==0.33.3 check-jsonschema \
             --schemafile tmux-status.schema.json fixtures/*.json
+          python3 validate_semantics.py fixtures/*.json
+          if jq '.pane_count = 0' fixtures/confirmed.json | \
+            python3 validate_semantics.py -; then
+            echo "contradictory summary counts unexpectedly passed" >&2
+            exit 1
+          fi
           for fixture in fixtures-invalid/*.json; do
             if uvx --from check-jsonschema==0.33.3 check-jsonschema \
               --schemafile tmux-status.schema.json "$fixture"; then

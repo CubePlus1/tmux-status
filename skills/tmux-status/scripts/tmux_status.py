@@ -127,7 +127,7 @@ class AgentConversation:
     conversation_id_kind: str
     identity_source: str
     source_path: Optional[str]
-    working_directory: str
+    working_directory: Optional[str]
     process_instances: Dict[str, str]
     stable_mapping_key: Optional[str]
     resume_command: Optional[str]
@@ -832,7 +832,7 @@ def process_working_directory(pid: int) -> Optional[str]:
     proc_cwd = Path("/proc") / str(pid) / "cwd"
     try:
         target = os.readlink(str(proc_cwd))
-        if os.path.isabs(target):
+        if os.path.isabs(target) and os.path.isdir(target):
             return os.path.normpath(target)
     except OSError:
         pass
@@ -842,7 +842,8 @@ def process_working_directory(pid: int) -> Optional[str]:
     result = run_command(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"])
     for line in result.stdout.splitlines():
         if line.startswith("n/"):
-            return os.path.normpath(line[1:])
+            target = os.path.normpath(line[1:])
+            return target if os.path.isdir(target) else None
     return None
 
 
@@ -1021,7 +1022,7 @@ def unknown_conversation(
     process_pids: List[int],
     process_instance_keys: List[str],
     evidence: str,
-    cwd: str,
+    cwd: Optional[str],
     identity_source: str = "unavailable",
 ) -> AgentConversation:
     processes = sorted(zip(process_pids, process_instance_keys))
@@ -1044,7 +1045,7 @@ def append_unknown_conversations(
     conversations: List[AgentConversation],
     tool: str,
     process_pids: List[int],
-    process_cwds: Dict[int, str],
+    process_cwds: Dict[int, Optional[str]],
     process_keys: Dict[int, str],
     processes_by_pid: Dict[int, ProcessInfo],
     evidence: str,
@@ -1147,7 +1148,7 @@ def collect_agent_conversations(
             process_cwds[process.pid] = (
                 os.path.normpath(observed_cwd)
                 if observed_cwd
-                else absolute_command_cwd or pane.current_path
+                else absolute_command_cwd
             )
             process_cwds_confirmed[process.pid] = bool(
                 observed_cwd or absolute_command_cwd
@@ -1862,7 +1863,7 @@ def render_markdown(payload: dict) -> str:
                         markdown_code(conversation["source_path"] or "unknown")
                     ),
                     "  - working directory: {}".format(
-                        markdown_code(conversation["working_directory"])
+                        markdown_code(conversation["working_directory"] or "unknown")
                     ),
                     "  - stable mapping key: {}".format(
                         markdown_code(conversation["stable_mapping_key"] or "unknown")

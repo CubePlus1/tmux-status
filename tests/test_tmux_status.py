@@ -926,9 +926,18 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual("unavailable", conversations[0].identity_source)
         self.assertIsNone(conversations[0].conversation_id)
         self.assertIsNone(conversations[0].resume_command)
+        self.assertIsNone(conversations[0].working_directory)
         self.assertIn(
             "no process-associated working directory", conversations[0].evidence
         )
+
+    def test_deleted_process_working_directory_is_unavailable(self):
+        with patch.object(
+            tmux_status.os, "readlink", return_value="/tmp/project (deleted)"
+        ):
+            with patch.object(tmux_status.os.path, "isdir", return_value=False):
+                with patch.object(tmux_status.shutil, "which", return_value=None):
+                    self.assertIsNone(tmux_status.process_working_directory(101))
 
     def test_linux_process_start_time_handles_spaces_in_comm(self):
         fields_after_comm = ["S"] + [str(field) for field in range(4, 23)]

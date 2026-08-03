@@ -143,7 +143,7 @@
           ]
         },
         "source_path": { "type": ["string", "null"] },
-        "working_directory": { "type": "string" },
+        "working_directory": { "type": ["string", "null"] },
         "process_instances": { "$ref": "#/$defs/processInstances" },
         "stable_mapping_key": { "type": ["string", "null"] },
         "resume_command": { "type": ["string", "null"] },
@@ -195,6 +195,7 @@
                   ]
                 },
                 "stable_mapping_key": { "type": "string", "minLength": 1 },
+                "working_directory": { "type": "string" },
                 "resume_command": { "type": "string", "minLength": 1 }
               }
             },
@@ -294,7 +295,7 @@
         "pane_id": { "type": "string" },
         "pane_pid": { "type": "integer", "minimum": 1 },
         "process_instances": { "$ref": "#/$defs/processInstances" },
-        "working_directory": { "type": "string" },
+        "working_directory": { "type": ["string", "null"] },
         "resume_command": { "type": ["string", "null"] }
       },
       "allOf": [
@@ -339,6 +340,7 @@
                 ]
               },
               "stable_mapping_key": { "type": "string", "minLength": 1 },
+              "working_directory": { "type": "string" },
               "resume_command": { "type": "string", "minLength": 1 }
             }
           },
