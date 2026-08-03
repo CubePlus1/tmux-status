@@ -146,7 +146,12 @@ def validate(payload):
             if status == "confirmed":
                 tool = conversation.get("tool")
                 conversation_id = conversation.get("conversation_id")
-                confirmed_mapping = (tool, conversation_id)
+                confirmed_mapping = (
+                    tool,
+                    conversation_id.lower()
+                    if isinstance(conversation_id, str)
+                    else conversation_id,
+                )
                 if confirmed_mapping in seen_confirmed_mappings:
                     errors.append(
                         "confirmed conversation mapping is duplicated within a pane"

@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import shlex
 import struct
 import tempfile
 import unittest
@@ -744,6 +745,44 @@ class TmuxStatusTests(unittest.TestCase):
     def test_lossless_argv_preserves_explicit_cwd_with_spaces(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
         pane = self.pane("/pane/project")
+        with tempfile.TemporaryDirectory() as directory:
+            cwd = str(Path(directory) / "my project")
+            Path(cwd).mkdir()
+            process = tmux_status.ProcessInfo(
+                101,
+                100,
+                0.0,
+                1,
+                "S",
+                "0:01",
+                "codex -C {} resume {}".format(cwd, codex_id),
+            )
+            conversations = tmux_status.collect_agent_conversations(
+                pane,
+                [process],
+                open_paths=lambda _pid: [],
+                scrollback=lambda _pane_id: "",
+                working_directory=lambda _pid: None,
+                arguments=lambda _pid: [
+                    "codex",
+                    "-C",
+                    cwd,
+                    "resume",
+                    codex_id,
+                ],
+            )
+
+        self.assertEqual("confirmed", conversations[0].conversation_id_status)
+        self.assertEqual(cwd, conversations[0].working_directory)
+        self.assertEqual(
+            "codex resume -C {} {}".format(shlex.quote(cwd), codex_id),
+            conversations[0].resume_command,
+        )
+
+    def test_unusable_absolute_cli_cwd_keeps_mapping_unknown(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane("/pane/project")
+        missing_cwd = "/tmp/definitely-missing-codex-working-directory"
         process = tmux_status.ProcessInfo(
             101,
             100,
@@ -751,7 +790,7 @@ class TmuxStatusTests(unittest.TestCase):
             1,
             "S",
             "0:01",
-            "codex -C /tmp/my project resume {}".format(codex_id),
+            "codex -C {} resume {}".format(missing_cwd, codex_id),
         )
         conversations = tmux_status.collect_agent_conversations(
             pane,
@@ -762,17 +801,63 @@ class TmuxStatusTests(unittest.TestCase):
             arguments=lambda _pid: [
                 "codex",
                 "-C",
-                "/tmp/my project",
+                missing_cwd,
                 "resume",
                 codex_id,
             ],
         )
 
-        self.assertEqual("confirmed", conversations[0].conversation_id_status)
-        self.assertEqual("/tmp/my project", conversations[0].working_directory)
+        self.assertEqual("unknown", conversations[0].conversation_id_status)
+        self.assertIsNone(conversations[0].conversation_id)
+        self.assertIsNone(conversations[0].resume_command)
+
+    def test_same_session_with_different_process_cwds_is_conflicting(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane("/pane/project")
+        processes = [
+            tmux_status.ProcessInfo(
+                pid,
+                100,
+                0.0,
+                1,
+                "S",
+                "0:01",
+                "codex resume {}".format(codex_id),
+            )
+            for pid in (101, 102)
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            process_cwds = {
+                101: str(Path(directory) / "first"),
+                102: str(Path(directory) / "second"),
+            }
+            for cwd in process_cwds.values():
+                Path(cwd).mkdir()
+            conversations = tmux_status.collect_agent_conversations(
+                pane,
+                processes,
+                open_paths=lambda _pid: [],
+                scrollback=lambda _pane_id: "",
+                working_directory=lambda pid: process_cwds[pid],
+                arguments=lambda _pid: ["codex", "resume", codex_id],
+            )
+
+        self.assertTrue(conversations)
+        self.assertTrue(
+            all(
+                conversation.conversation_id_status == "unknown"
+                and conversation.identity_source == "conflicting_evidence"
+                and conversation.conversation_id is None
+                for conversation in conversations
+            )
+        )
         self.assertEqual(
-            "codex resume -C '/tmp/my project' {}".format(codex_id),
-            conversations[0].resume_command,
+            {"101", "102"},
+            {
+                pid
+                for conversation in conversations
+                for pid in conversation.process_instances
+            },
         )
 
     def test_observed_cwd_prevents_reapplying_relative_cli_cwd(self):

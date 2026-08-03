@@ -1164,6 +1164,10 @@ def resolve_working_directory(value: Optional[str], fallback: str) -> str:
     return os.path.normpath(os.path.join(fallback, expanded))
 
 
+def usable_working_directory(value: Optional[str]) -> bool:
+    return bool(value) and os.path.isdir(value) and os.access(value, os.X_OK)
+
+
 def capture_pane_scrollback(pane_id: str) -> str:
     result = run_command(
         ["tmux", "capture-pane", "-p", "-J", "-t", pane_id, "-S", "-300"]
@@ -1360,6 +1364,8 @@ def collect_agent_conversations(
                 if command_cwd and os.path.isabs(os.path.expanduser(command_cwd))
                 else None
             )
+            if not usable_working_directory(absolute_command_cwd):
+                absolute_command_cwd = None
             process_cwds[process.pid] = (
                 os.path.normpath(observed_cwd)
                 if observed_cwd
@@ -1436,9 +1442,7 @@ def collect_agent_conversations(
                     resolved_metadata_cwd = resolve_working_directory(
                         metadata_cwd, pane.current_path
                     )
-                    if not os.path.isdir(resolved_metadata_cwd) or not os.access(
-                        resolved_metadata_cwd, os.X_OK
-                    ):
+                    if not usable_working_directory(resolved_metadata_cwd):
                         unavailable_reasons.append(
                             "PID {} session metadata working directory is unavailable".format(
                                 process.pid
@@ -1595,6 +1599,21 @@ def collect_agent_conversations(
             unavailable_reasons.append(
                 "runtime wrapper has a session UUID but no recoverable child cwd"
             )
+
+        confirmed_keys_by_session: Dict[str, List[Tuple[str, Optional[str]]]] = {}
+        for key in confirmed:
+            confirmed_keys_by_session.setdefault(key[0], []).append(key)
+        for session_id, keys in confirmed_keys_by_session.items():
+            if len(keys) < 2:
+                continue
+            conflicts.append(
+                "session {} has conflicting process working directories".format(
+                    session_id
+                )
+            )
+            for key in keys:
+                entry = confirmed.pop(key)
+                conflicting_pids.extend(entry["pids"])
 
         if confirmed:
             for (session_id, _cwd), evidence in sorted(confirmed.items()):
