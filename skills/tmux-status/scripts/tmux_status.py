@@ -672,9 +672,21 @@ def session_id_from_arguments(
     return None
 
 
-def configured_codex_sessions_root() -> Path:
-    codex_home = os.environ.get("CODEX_HOME")
-    data_root = Path(codex_home).expanduser() if codex_home else Path.home() / ".codex"
+def configured_session_root(
+    tool: str, process_environment: Optional[Dict[str, str]] = None
+) -> Optional[Path]:
+    environment_key = "CODEX_HOME" if tool == "codex" else "GROK_HOME"
+    configured_home = (process_environment or {}).get(environment_key)
+    if not configured_home:
+        configured_home = os.environ.get(environment_key)
+    if configured_home:
+        data_root = Path(configured_home).expanduser()
+    elif tool == "codex":
+        data_root = Path.home() / ".codex"
+    elif tool == "grok":
+        data_root = Path.home() / ".grok"
+    else:
+        return None
     return data_root / "sessions"
 
 
@@ -690,20 +702,21 @@ def session_metadata_from_open_file(
     tool: str,
     path: Path,
     session_roots: Optional[Dict[str, Path]] = None,
+    process_environment: Optional[Dict[str, str]] = None,
 ) -> Optional[Tuple[str, Optional[str]]]:
     """Read only identity metadata from a session file opened by the process."""
+    session_root = (session_roots or {}).get(tool) or configured_session_root(
+        tool, process_environment
+    )
+    if session_root is None or not path_is_within(path, session_root):
+        return None
     if tool == "grok":
-        if "sessions" not in path.parts or path.name not in SESSION_FILE_NAMES["grok"]:
+        if path.name not in SESSION_FILE_NAMES["grok"]:
             return None
         session_id = validated_uuid(path.parent.name)
         return (session_id, None) if session_id else None
 
     if tool != "codex":
-        return None
-    codex_sessions_root = (session_roots or {}).get(
-        "codex", configured_codex_sessions_root()
-    )
-    if not path_is_within(path, codex_sessions_root):
         return None
     if not path.name.startswith("rollout-") or path.suffix != ".jsonl":
         return None
@@ -790,6 +803,22 @@ def process_arguments(pid: int) -> Optional[List[str]]:
         return None
     arguments = [os.fsdecode(argument) for argument in raw_arguments if argument]
     return arguments or None
+
+
+def process_agent_home_environment(pid: int) -> Dict[str, str]:
+    """Read only agent data-root variables, never retain unrelated process secrets."""
+    environ_path = Path("/proc") / str(pid) / "environ"
+    try:
+        entries = environ_path.read_bytes().split(b"\0")
+    except OSError:
+        return {}
+    selected = {}
+    for entry in entries:
+        for key in ("CODEX_HOME", "GROK_HOME"):
+            prefix = (key + "=").encode()
+            if entry.startswith(prefix):
+                selected[key] = os.fsdecode(entry[len(prefix) :])
+    return selected
 
 
 def linux_process_start_time(stat_text: str) -> Optional[str]:
@@ -944,6 +973,7 @@ def collect_agent_conversations(
     arguments: Callable[[int], Optional[List[str]]] = process_arguments,
     instance_key: Optional[Callable[[int], str]] = None,
     session_roots: Optional[Dict[str, Path]] = None,
+    environment: Callable[[int], Dict[str, str]] = process_agent_home_environment,
 ) -> List[AgentConversation]:
     instance_key = instance_key or process_instance_key
     tool_processes: Dict[str, List[ProcessInfo]] = {}
@@ -961,12 +991,14 @@ def collect_agent_conversations(
         process_cwds = {}
         process_cwds_confirmed = {}
         process_argvs = {}
+        process_environments = {}
         process_keys = {}
         for process in matching_processes:
             process_keys[process.pid] = instance_key(process.pid)
             observed_cwd = working_directory(process.pid)
             lossless_arguments = arguments(process.pid)
             process_argvs[process.pid] = lossless_arguments
+            process_environments[process.pid] = environment(process.pid)
             command_cwd = (
                 working_directory_from_arguments(tool, lossless_arguments)
                 if lossless_arguments is not None
@@ -1000,7 +1032,12 @@ def collect_agent_conversations(
             )
             file_evidence: Dict[str, Tuple[str, Optional[str]]] = {}
             for path in open_paths(process.pid):
-                metadata = session_metadata_from_open_file(tool, path, session_roots)
+                metadata = session_metadata_from_open_file(
+                    tool,
+                    path,
+                    session_roots,
+                    process_environments[process.pid],
+                )
                 if metadata:
                     session_id, metadata_cwd = metadata
                     file_evidence[session_id] = (str(path), metadata_cwd)

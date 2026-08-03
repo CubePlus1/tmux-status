@@ -335,7 +335,9 @@ class TmuxStatusTests(unittest.TestCase):
             )
             self.assertEqual(
                 grok_id,
-                tmux_status.session_id_from_open_file("grok", events),
+                tmux_status.session_id_from_open_file(
+                    "grok", events, {"grok": root / "sessions"}
+                ),
             )
 
             unrelated = root / "project" / "sessions" / rollout.name
@@ -346,6 +348,16 @@ class TmuxStatusTests(unittest.TestCase):
             self.assertIsNone(
                 tmux_status.session_id_from_open_file(
                     "codex", unrelated, {"codex": root / "sessions"}
+                )
+            )
+            unrelated_grok = (
+                root / "project" / "sessions" / "fixture" / grok_id / "events.jsonl"
+            )
+            unrelated_grok.parent.mkdir(parents=True)
+            unrelated_grok.write_text("", encoding="utf-8")
+            self.assertIsNone(
+                tmux_status.session_id_from_open_file(
+                    "grok", unrelated_grok, {"grok": root / "sessions"}
                 )
             )
 
@@ -371,6 +383,7 @@ class TmuxStatusTests(unittest.TestCase):
                 open_paths=lambda _pid: [path],
                 scrollback=lambda _pane_id: "",
                 working_directory=lambda _pid: "/tmp/my project",
+                session_roots={"grok": Path(directory) / "sessions"},
             )
         self.assertEqual(1, len(conversations))
         conversation = conversations[0]
@@ -383,6 +396,34 @@ class TmuxStatusTests(unittest.TestCase):
             "grok --cwd '/tmp/my project' --resume {}".format(grok_id),
             conversation.resume_command,
         )
+
+    def test_uses_the_inspected_process_codex_home(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane()
+        process = tmux_status.ProcessInfo(
+            101, 100, 0.0, 1, "S", "0:01", "/usr/local/bin/codex"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory) / "custom-codex"
+            rollout_dir = codex_home / "sessions" / "2026" / "08" / "03"
+            rollout_dir.mkdir(parents=True)
+            rollout = rollout_dir / "rollout-{}.jsonl".format(codex_id)
+            rollout.write_text(
+                json.dumps({"type": "session_meta", "payload": {"id": codex_id}})
+                + "\n",
+                encoding="utf-8",
+            )
+            conversations = tmux_status.collect_agent_conversations(
+                pane,
+                [process],
+                open_paths=lambda _pid: [rollout],
+                scrollback=lambda _pane_id: "",
+                working_directory=lambda _pid: "/tmp/project",
+                environment=lambda _pid: {"CODEX_HOME": str(codex_home)},
+            )
+
+        self.assertEqual("confirmed", conversations[0].conversation_id_status)
+        self.assertEqual(codex_id, conversations[0].conversation_id)
 
     def test_open_session_file_has_priority_over_wrapper_resume_argument(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
@@ -910,6 +951,7 @@ class TmuxStatusTests(unittest.TestCase):
                 [process],
                 open_paths=lambda _pid: paths,
                 scrollback=lambda _pane_id: "",
+                session_roots={"grok": Path(directory) / "sessions"},
             )
         self.assertEqual(1, len(conversations))
         self.assertEqual("unknown", conversations[0].conversation_id_status)
@@ -1085,6 +1127,14 @@ class TmuxStatusTests(unittest.TestCase):
                             self.assertIsNone(conversation["conversation_id"])
                             self.assertIsNone(conversation["stable_mapping_key"])
                             self.assertIsNone(conversation["resume_command"])
+                        else:
+                            self.assertEqual(
+                                "{}:{}".format(
+                                    conversation["tool"],
+                                    conversation["conversation_id"],
+                                ),
+                                conversation["stable_mapping_key"],
+                            )
 
 
 if __name__ == "__main__":

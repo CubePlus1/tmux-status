@@ -87,6 +87,16 @@
       "propertyNames": { "pattern": "^[1-9][0-9]*$" },
       "additionalProperties": { "type": "string", "minLength": 1 }
     },
+    "codexStableMappingKey": {
+      "type": "string",
+      "description": "Derived exactly as codex:<conversation_id>; consumers must enforce equality with the sibling conversation_id.",
+      "pattern": "^codex:[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+    },
+    "grokStableMappingKey": {
+      "type": "string",
+      "description": "Derived exactly as grok:<conversation_id>; consumers must enforce equality with the sibling conversation_id.",
+      "pattern": "^grok:[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+    },
     "conversationCommon": {
       "type": "object",
       "required": [
@@ -143,6 +153,21 @@
         {
           "oneOf": [
             {
+              "allOf": [
+                {
+                  "if": { "properties": { "tool": { "const": "codex" } } },
+                  "then": {
+                    "properties": {
+                      "stable_mapping_key": { "$ref": "#/$defs/codexStableMappingKey" }
+                    }
+                  },
+                  "else": {
+                    "properties": {
+                      "stable_mapping_key": { "$ref": "#/$defs/grokStableMappingKey" }
+                    }
+                  }
+                }
+              ],
               "properties": {
                 "conversation_id_status": { "const": "confirmed" },
                 "conversation_id": { "type": "string", "format": "uuid" },
@@ -273,6 +298,21 @@
         {
           "if": { "properties": { "conversation_id_status": { "const": "confirmed" } } },
           "then": {
+            "allOf": [
+              {
+                "if": { "properties": { "tool": { "const": "codex" } } },
+                "then": {
+                  "properties": {
+                    "stable_mapping_key": { "$ref": "#/$defs/codexStableMappingKey" }
+                  }
+                },
+                "else": {
+                  "properties": {
+                    "stable_mapping_key": { "$ref": "#/$defs/grokStableMappingKey" }
+                  }
+                }
+              }
+            ],
             "properties": {
               "conversation_id": { "type": "string", "format": "uuid" },
               "identity_source": {
