@@ -403,9 +403,10 @@ def command_tokens(command: str) -> List[str]:
         return re.findall(r"[^\s\"']+", command)
 
 
-def tool_arguments(tool: str, command: str) -> Optional[List[str]]:
+def tool_arguments_from_tokens(
+    tool: str, tokens: Sequence[str]
+) -> Optional[List[str]]:
     """Return arguments after the actual tool executable, unwrapping known runtimes."""
-    tokens = command_tokens(command)
     if not tokens:
         return None
 
@@ -456,11 +457,17 @@ def tool_arguments(tool: str, command: str) -> Optional[List[str]]:
             executable_name,
         ):
             return None
-    return tokens[executable_index + 1 :]
+    return list(tokens[executable_index + 1 :])
 
 
-def working_directory_from_command(tool: str, command: str) -> Optional[str]:
-    arguments = tool_arguments(tool, command)
+def tool_arguments(tool: str, command: str) -> Optional[List[str]]:
+    return tool_arguments_from_tokens(tool, command_tokens(command))
+
+
+def working_directory_from_arguments(
+    tool: str, tokens: Sequence[str]
+) -> Optional[str]:
+    arguments = tool_arguments_from_tokens(tool, tokens)
     if arguments is None:
         return None
     options = ("-C", "--cd") if tool == "codex" else ("--cwd",)
@@ -472,6 +479,10 @@ def working_directory_from_command(tool: str, command: str) -> Optional[str]:
             elif token.startswith(option + "="):
                 found = token[len(option) + 1 :]
     return found or None
+
+
+def working_directory_from_command(tool: str, command: str) -> Optional[str]:
+    return working_directory_from_arguments(tool, command_tokens(command))
 
 
 CODEX_VALUE_OPTIONS = {
@@ -519,7 +530,13 @@ def codex_subcommand_arguments(arguments: List[str], subcommand: str) -> Optiona
 
 def session_id_from_command(tool: str, command: str) -> Optional[Tuple[str, str]]:
     """Return an explicit UUID and its CLI evidence type, never a title or PID."""
-    tokens = command_tokens(command)
+    return session_id_from_arguments(tool, command_tokens(command))
+
+
+def session_id_from_arguments(
+    tool: str, tokens: Sequence[str]
+) -> Optional[Tuple[str, str]]:
+    """Return explicit CLI identity from an already-tokenized argv."""
     if not tokens:
         return None
 
@@ -549,7 +566,7 @@ def session_id_from_command(tool: str, command: str) -> Optional[Tuple[str, str]
 
     if tool != "codex":
         return None
-    arguments = tool_arguments(tool, command)
+    arguments = tool_arguments_from_tokens(tool, tokens)
     if arguments is None:
         return None
     resume_arguments = codex_subcommand_arguments(arguments, "resume")
@@ -656,6 +673,16 @@ def process_working_directory(pid: int) -> Optional[str]:
         if line.startswith("n/"):
             return os.path.normpath(line[1:])
     return None
+
+
+def process_arguments(pid: int) -> Optional[List[str]]:
+    cmdline_path = Path("/proc") / str(pid) / "cmdline"
+    try:
+        raw_arguments = cmdline_path.read_bytes().split(b"\0")
+    except OSError:
+        return None
+    arguments = [os.fsdecode(argument) for argument in raw_arguments if argument]
+    return arguments or None
 
 
 def linux_process_start_time(stat_text: str) -> Optional[str]:
@@ -824,6 +851,7 @@ def collect_agent_conversations(
     open_paths: Callable[[int], List[Path]] = list_open_paths,
     scrollback: Callable[[str], str] = capture_pane_scrollback,
     working_directory: Callable[[int], Optional[str]] = process_working_directory,
+    arguments: Callable[[int], Optional[List[str]]] = process_arguments,
     instance_key: Callable[[int], str] = process_instance_key,
 ) -> List[AgentConversation]:
     tool_processes: Dict[str, List[ProcessInfo]] = {}
@@ -840,10 +868,17 @@ def collect_agent_conversations(
     for tool, matching_processes in sorted(tool_processes.items()):
         process_cwds = {}
         process_cwds_confirmed = {}
+        process_argvs = {}
         process_keys = {}
         for process in matching_processes:
             observed_cwd = working_directory(process.pid)
-            command_cwd = working_directory_from_command(tool, process.command)
+            lossless_arguments = arguments(process.pid)
+            process_argvs[process.pid] = lossless_arguments
+            command_cwd = (
+                working_directory_from_arguments(tool, lossless_arguments)
+                if lossless_arguments is not None
+                else None
+            )
             process_cwds[process.pid] = resolve_working_directory(
                 command_cwd,
                 observed_cwd or pane.current_path,
@@ -858,7 +893,11 @@ def collect_agent_conversations(
         conflicting_pids = []
         unavailable_pids = []
         for process in matching_processes:
-            command_evidence = session_id_from_command(tool, process.command)
+            command_evidence = (
+                session_id_from_arguments(tool, process_argvs[process.pid])
+                if process_argvs[process.pid] is not None
+                else session_id_from_command(tool, process.command)
+            )
             file_evidence: Dict[str, Tuple[str, Optional[str]]] = {}
             for path in open_paths(process.pid):
                 metadata = session_metadata_from_open_file(tool, path)
@@ -952,20 +991,18 @@ def collect_agent_conversations(
 
         remaining_unresolved = []
         for unresolved_pid in unresolved_pids:
-            descendant_entries = []
+            related_entries = []
             for key, entry in confirmed.items():
                 for confirmed_pid in entry["pids"]:
-                    current = processes_by_pid.get(confirmed_pid)
-                    seen = set()
-                    while current and current.pid not in seen:
-                        seen.add(current.pid)
-                        if current.ppid == unresolved_pid:
-                            descendant_entries.append(key)
-                            break
-                        current = processes_by_pid.get(current.ppid)
-                    if key in descendant_entries:
+                    if process_is_ancestor(
+                        unresolved_pid, confirmed_pid, processes_by_pid
+                    ) or process_is_ancestor(
+                        confirmed_pid, unresolved_pid, processes_by_pid
+                    ):
+                        related_entries.append(key)
+                    if key in related_entries:
                         break
-            unique_entries = set(descendant_entries)
+            unique_entries = set(related_entries)
             if len(unique_entries) == 1:
                 confirmed[next(iter(unique_entries))]["pids"].append(unresolved_pid)
             else:

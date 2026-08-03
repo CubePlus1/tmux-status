@@ -386,11 +386,52 @@ class TmuxStatusTests(unittest.TestCase):
             open_paths=lambda _pid: [],
             scrollback=lambda _pane_id: "",
             working_directory=lambda _pid: "/process/project",
+            arguments=lambda _pid: [
+                "codex",
+                "-C",
+                "/agent/project",
+                "resume",
+                codex_id,
+            ],
         )
 
         self.assertEqual("/agent/project", conversations[0].working_directory)
         self.assertEqual(
             "codex resume -C /agent/project {}".format(codex_id),
+            conversations[0].resume_command,
+        )
+
+    def test_lossless_argv_preserves_explicit_cwd_with_spaces(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane("/pane/project")
+        process = tmux_status.ProcessInfo(
+            101,
+            100,
+            0.0,
+            1,
+            "S",
+            "0:01",
+            "codex -C /tmp/my project resume {}".format(codex_id),
+        )
+        conversations = tmux_status.collect_agent_conversations(
+            pane,
+            [process],
+            open_paths=lambda _pid: [],
+            scrollback=lambda _pane_id: "",
+            working_directory=lambda _pid: None,
+            arguments=lambda _pid: [
+                "codex",
+                "-C",
+                "/tmp/my project",
+                "resume",
+                codex_id,
+            ],
+        )
+
+        self.assertEqual("confirmed", conversations[0].conversation_id_status)
+        self.assertEqual("/tmp/my project", conversations[0].working_directory)
+        self.assertEqual(
+            "codex resume -C '/tmp/my project' {}".format(codex_id),
             conversations[0].resume_command,
         )
 
@@ -429,6 +470,39 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual("confirmed", conversations[0].conversation_id_status)
         self.assertEqual([101, 102], conversations[0].process_pids)
         self.assertEqual("/agent/project", conversations[0].working_directory)
+
+    def test_unresolved_child_folds_into_confirmed_wrapper_invocation(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane()
+        wrapper = tmux_status.ProcessInfo(
+            101,
+            100,
+            0.0,
+            1,
+            "S",
+            "0:01",
+            "node /opt/codex resume {}".format(codex_id),
+        )
+        child = tmux_status.ProcessInfo(
+            102, 101, 0.0, 1, "S", "0:01", "/usr/local/bin/codex"
+        )
+        conversations = tmux_status.collect_agent_conversations(
+            pane,
+            [wrapper, child],
+            open_paths=lambda _pid: [],
+            scrollback=lambda _pane_id: "",
+            working_directory=lambda _pid: "/agent/project",
+            arguments=lambda pid: (
+                ["node", "/opt/codex", "resume", codex_id]
+                if pid == wrapper.pid
+                else ["codex"]
+            ),
+        )
+
+        self.assertEqual(1, len(conversations))
+        self.assertEqual("confirmed", conversations[0].conversation_id_status)
+        self.assertEqual(codex_id, conversations[0].conversation_id)
+        self.assertEqual([101, 102], conversations[0].process_pids)
 
     def test_related_wrapper_and_child_identity_disagreement_is_conflicting(self):
         wrapper_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"

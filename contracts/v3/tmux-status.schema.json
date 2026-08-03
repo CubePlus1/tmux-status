@@ -62,6 +62,16 @@
       "items": { "$ref": "#/$defs/pane" }
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "report_type": { "const": "recovery" } },
+        "required": ["report_type"]
+      },
+      "then": { "properties": { "pre_restart": { "const": true } } },
+      "else": { "properties": { "pre_restart": { "const": false } } }
+    }
+  ],
   "$defs": {
     "version": {
       "type": "string",

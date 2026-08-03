@@ -8,6 +8,7 @@ Rules:
 
 - `session` and `tmux_session_name` are tmux names, never agent IDs.
 - A confirmed conversation requires process-associated file or CLI evidence, a UUID, `stable_mapping_key`, and `resume_command`.
+- `pre_restart` is true exactly for `report_type: "recovery"` and false for status or snapshot reports.
 - Every conversation records its own `working_directory`; pane cwd is never substituted for a different agent cwd, and missing process-associated cwd keeps recovery unknown.
 - `process_instance_keys` records one PID-plus-start identity per `process_pids` entry so PID reuse cannot merge unknown observations; it is never conversation-ID evidence.
 - Missing or conflicting evidence is `unknown` with null ID/key/command.
