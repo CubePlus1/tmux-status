@@ -553,6 +553,59 @@ class TmuxStatusTests(unittest.TestCase):
                 )
             )
 
+    def test_lsof_evidence_revalidates_the_target_descriptor(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rollout_dir = root / "sessions" / "2026" / "08" / "03"
+            rollout_dir.mkdir(parents=True)
+            rollout = rollout_dir / "rollout-{}.jsonl".format(codex_id)
+            rollout.write_text(
+                json.dumps({"type": "session_meta", "payload": {"id": codex_id}})
+                + "\n",
+                encoding="utf-8",
+            )
+            rollout_stat = rollout.stat()
+            evidence = tmux_status.OpenProcessFile(
+                source_path=rollout,
+                read_path=rollout,
+                inode=rollout_stat.st_ino,
+                device=rollout_stat.st_dev,
+                process_id=101,
+                descriptor="15",
+            )
+            matching_lsof = "f15u\nD{}\ni{}\nn{}\n".format(
+                hex(rollout_stat.st_dev), rollout_stat.st_ino, rollout
+            )
+            switched_lsof = "f15u\nD{}\ni{}\nn{}\n".format(
+                hex(rollout_stat.st_dev), rollout_stat.st_ino + 1, rollout
+            )
+            results = [
+                tmux_status.subprocess.CompletedProcess(
+                    [], 0, stdout=matching_lsof, stderr=""
+                ),
+                tmux_status.subprocess.CompletedProcess(
+                    [], 0, stdout=switched_lsof, stderr=""
+                ),
+            ]
+            with patch.object(tmux_status, "run_command", side_effect=results):
+                self.assertIsNone(
+                    tmux_status.session_id_from_open_file(
+                        "codex", evidence, {"codex": root / "sessions"}
+                    )
+                )
+
+    def test_lsof_parser_keeps_numeric_descriptor_identity(self):
+        parsed = tmux_status.parse_lsof_open_files(
+            "f7u\nD0x100\ni42\nn/tmp/session.jsonl\nfcwd\nn/tmp\n",
+            101,
+        )
+        self.assertEqual(1, len(parsed))
+        self.assertEqual("7", parsed[0].descriptor)
+        self.assertEqual(101, parsed[0].process_id)
+        self.assertEqual(0x100, parsed[0].device)
+        self.assertEqual(42, parsed[0].inode)
+
     def test_descriptor_capture_rejects_a_changed_fd_target(self):
         descriptor = Path("/proc/101/fd/7")
         descriptor_stat = os.stat(__file__)
@@ -1771,6 +1824,11 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertIn("codex_thread_id", markdown)
         self.assertIn(codex_id, markdown)
         self.assertIn("codex resume -C /tmp/project {}".format(codex_id), markdown)
+
+    def test_markdown_code_uses_a_safe_backtick_delimiter(self):
+        self.assertEqual("``a`b``", tmux_status.markdown_code("a`b"))
+        self.assertEqual("`` `quoted` ``", tmux_status.markdown_code("`quoted`"))
+        self.assertEqual("```a``b```", tmux_status.markdown_code("a``b"))
 
     def test_canonical_v3_fixtures_preserve_identity_semantics(self):
         root = Path(__file__).resolve().parents[1] / "contracts" / "v3"

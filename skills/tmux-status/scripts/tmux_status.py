@@ -113,6 +113,8 @@ class OpenProcessFile:
     read_path: Path
     inode: Optional[int] = None
     device: Optional[int] = None
+    process_id: Optional[int] = None
+    descriptor: Optional[str] = None
 
 
 @dataclass
@@ -830,6 +832,8 @@ def session_metadata_from_open_file(
     )
     if session_root is None or not path_is_within(source_path, session_root):
         return None
+    if not captured_descriptor_is_current(opened_file):
+        return None
     if tool == "grok":
         if source_path.name not in SESSION_FILE_NAMES["grok"]:
             return None
@@ -843,6 +847,8 @@ def session_metadata_from_open_file(
                 if file_identity(os.fstat(session_file.fileno())) != file_identity(
                     opened_stat
                 ):
+                    return None
+                if not captured_descriptor_is_current(opened_file):
                     return None
         except OSError:
             return None
@@ -862,6 +868,8 @@ def session_metadata_from_open_file(
             if file_identity(os.fstat(session_file.fileno())) != file_identity(
                 opened_stat
             ):
+                return None
+            if not captured_descriptor_is_current(opened_file):
                 return None
         event = json.loads(first_line)
     except (OSError, ValueError):
@@ -904,6 +912,77 @@ def opened_file_matches_capture(
     )
 
 
+def parse_lsof_open_files(output: str, pid: int) -> List[OpenProcessFile]:
+    paths = []
+    descriptor = None
+    descriptor_inode = None
+    descriptor_device = None
+    for line in output.splitlines():
+        if line.startswith("f"):
+            descriptor_match = re.match(r"^(\d+)", line[1:])
+            descriptor = descriptor_match.group(1) if descriptor_match else None
+            descriptor_inode = None
+            descriptor_device = None
+            continue
+        if line.startswith("D"):
+            try:
+                descriptor_device = int(line[1:], 0)
+            except ValueError:
+                descriptor_device = None
+            continue
+        if line.startswith("i"):
+            try:
+                descriptor_inode = int(line[1:])
+            except ValueError:
+                descriptor_inode = None
+            continue
+        if not line.startswith("n/") or descriptor is None:
+            continue
+        path = Path(line[1:])
+        if path.is_absolute():
+            paths.append(
+                OpenProcessFile(
+                    path,
+                    path,
+                    descriptor_inode,
+                    descriptor_device,
+                    pid,
+                    descriptor,
+                )
+            )
+    return paths
+
+
+def captured_descriptor_is_current(opened_file: OpenProcessFile) -> bool:
+    if opened_file.process_id is None or opened_file.descriptor is None:
+        return True
+    result = run_command(
+        [
+            "lsof",
+            "-a",
+            "-p",
+            str(opened_file.process_id),
+            "-d",
+            opened_file.descriptor,
+            "-FfDin",
+        ]
+    )
+    if result.returncode != 0:
+        return False
+    current_files = parse_lsof_open_files(result.stdout, opened_file.process_id)
+    return any(
+        current.descriptor == opened_file.descriptor
+        and current.source_path == opened_file.source_path
+        and (
+            opened_file.inode is None or current.inode == opened_file.inode
+        )
+        and (
+            opened_file.device is None or current.device == opened_file.device
+        )
+        for current in current_files
+    )
+
+
 def list_open_paths(pid: int) -> List[OpenProcessFile]:
     proc_directory = Path("/proc") / str(pid) / "fd"
     if proc_directory.is_dir():
@@ -920,34 +999,7 @@ def list_open_paths(pid: int) -> List[OpenProcessFile]:
     if not shutil.which("lsof"):
         return []
     result = run_command(["lsof", "-FfDin", "-p", str(pid)])
-    paths = []
-    descriptor_inode = None
-    descriptor_device = None
-    for line in result.stdout.splitlines():
-        if line.startswith("f"):
-            descriptor_inode = None
-            descriptor_device = None
-            continue
-        if line.startswith("D"):
-            try:
-                descriptor_device = int(line[1:], 0)
-            except ValueError:
-                descriptor_device = None
-            continue
-        if line.startswith("i"):
-            try:
-                descriptor_inode = int(line[1:])
-            except ValueError:
-                descriptor_inode = None
-            continue
-        if not line.startswith("n/"):
-            continue
-        path = Path(line[1:])
-        if path.is_absolute():
-            paths.append(
-                OpenProcessFile(path, path, descriptor_inode, descriptor_device)
-            )
-    return paths
+    return parse_lsof_open_files(result.stdout, pid)
 
 
 def capture_open_descriptor(descriptor: Path) -> Optional[OpenProcessFile]:
@@ -2104,7 +2156,20 @@ def status_payload(
 
 
 def markdown_code(value: object) -> str:
-    return "`{}`".format(str(value).replace("`", "\\`"))
+    text = str(value)
+    backtick_runs = [len(run) for run in re.findall(r"`+", text)]
+    delimiter = "`" * (max(backtick_runs, default=0) + 1)
+    needs_padding = (
+        text.startswith("`")
+        or text.endswith("`")
+        or (
+            text.startswith(" ")
+            and text.endswith(" ")
+            and bool(text.strip())
+        )
+    )
+    content = " {} ".format(text) if needs_padding else text
+    return "{}{}{}".format(delimiter, content, delimiter)
 
 
 def render_markdown(payload: dict) -> str:

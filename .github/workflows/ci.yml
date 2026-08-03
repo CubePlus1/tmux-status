@@ -64,6 +64,8 @@ jobs:
             '.panes[0].agent_conversations += [(.panes[0].agent_conversations[0] | .conversation_id |= ascii_upcase | .stable_mapping_key = ("codex:" + .conversation_id) | .resume_command = ("codex resume -C /tmp/project " + .conversation_id) | .process_instances = {"102":"102:upper"})] | .recovery += [(.recovery[0] | .conversation_id |= ascii_upcase | .stable_mapping_key = ("codex:" + .conversation_id) | .resume_command = ("codex resume -C /tmp/project " + .conversation_id) | .process_instances = {"102":"102:upper"})] | .confirmed_conversation_count = 2' \
             '.panes += [.panes[0] | .agent_conversations = []] | .pane_count = 2' \
             '.panes[0].dead = true' \
+            '.panes[0].process_count = 0' \
+            '.panes[0].tools = []' \
             '.panes[0].agent_conversations[0].working_directory = ""'; do
             if jq "$mutation" fixtures/confirmed.json | \
               python3 validate_semantics.py -; then

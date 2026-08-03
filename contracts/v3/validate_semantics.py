@@ -111,12 +111,16 @@ def validate(payload):
             errors.append("pane_instance_id does not match pane identity fields")
         conversations = pane.get("agent_conversations", [])
         seen_confirmed_mappings = set()
+        mapped_process_pids = set()
+        conversation_tools = set()
         if pane.get("dead") and conversations:
             errors.append("dead pane cannot contain agent conversations")
         for conversation in conversations:
+            conversation_tools.add(conversation.get("tool"))
             for pid, instance_key in conversation.get(
                 "process_instances", {}
             ).items():
+                mapped_process_pids.add(pid)
                 if int(pid) > MAX_PROCESS_PID:
                     errors.append(
                         "process_instances PID exceeds signed 32-bit range"
@@ -168,6 +172,10 @@ def validate(payload):
                     tool, conversation_id, cwd
                 ):
                     errors.append("resume_command does not match tool, ID, and cwd")
+        if pane.get("process_count", 0) < len(mapped_process_pids):
+            errors.append("process_count does not cover conversation process PIDs")
+        if not conversation_tools.issubset(set(pane.get("tools", []))):
+            errors.append("tools does not cover conversation tools")
     if recovery != projected:
         errors.append("recovery is not the ordered pane conversation projection")
     return errors
