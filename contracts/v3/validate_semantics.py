@@ -20,6 +20,7 @@ RECOVERY_FIELDS = (
     "resume_command",
 )
 MAX_PROCESS_PID = 2147483647
+MAX_SAFE_INTEGER = 9007199254740991
 
 
 def expected_resume(tool, conversation_id, cwd):
@@ -57,6 +58,8 @@ def validate(payload):
 
     projected = []
     for pane in panes:
+        if pane.get("session_created", 0) > MAX_SAFE_INTEGER:
+            errors.append("session_created exceeds safe database integer range")
         legacy_aliases = (
             ("session", pane.get("tmux_session_name")),
             (
@@ -88,11 +91,15 @@ def validate(payload):
         if pane.get("pane_instance_id") != expected_pane_instance_id:
             errors.append("pane_instance_id does not match pane identity fields")
         for conversation in pane.get("agent_conversations", []):
-            if any(
-                int(pid) > MAX_PROCESS_PID
-                for pid in conversation.get("process_instances", {})
-            ):
-                errors.append("process_instances PID exceeds signed 32-bit range")
+            for pid, instance_key in conversation.get(
+                "process_instances", {}
+            ).items():
+                if int(pid) > MAX_PROCESS_PID:
+                    errors.append(
+                        "process_instances PID exceeds signed 32-bit range"
+                    )
+                if not instance_key.startswith(pid + ":"):
+                    errors.append("process instance key does not match its PID")
             entry = {field: conversation[field] for field in RECOVERY_FIELDS}
             entry.update(
                 tmux_target=pane["tmux_target"],

@@ -264,6 +264,29 @@ class TmuxStatusTests(unittest.TestCase):
         )
         self.assertEqual("codex", tmux_status.tool_for_arguments(arguments))
 
+    def test_node_wrapper_consumes_value_taking_runtime_options(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        arguments = [
+            "node",
+            "-r",
+            "preload",
+            "--import=loader",
+            "/tmp/my tools/codex",
+            "resume",
+            codex_id,
+        ]
+        self.assertEqual(
+            (codex_id, "cli_resume_argument"),
+            tmux_status.session_id_from_arguments("codex", arguments),
+        )
+        self.assertEqual("codex", tmux_status.tool_for_arguments(arguments))
+        process = tmux_status.ProcessInfo(
+            101, 100, 0.0, 1, "S", "0:01", "node -r preload /tmp/my tools/codex"
+        )
+        self.assertTrue(
+            tmux_status.is_runtime_wrapper_process(process, "codex", arguments)
+        )
+
     def test_tool_detection_supports_versioned_grok_binary(self):
         process = tmux_status.ProcessInfo(
             1,
@@ -866,6 +889,32 @@ class TmuxStatusTests(unittest.TestCase):
                 if pid == wrapper.pid
                 else ["codex", "resume", codex_id]
             ),
+        )
+
+        self.assertEqual(1, len(conversations))
+        self.assertEqual("confirmed", conversations[0].conversation_id_status)
+        self.assertEqual({"101", "102"}, set(conversations[0].process_instances))
+        self.assertEqual("/project", conversations[0].working_directory)
+
+    def test_wrapper_without_cwd_folds_into_confirmed_child(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        wrapper = tmux_status.ProcessInfo(
+            101, 100, 0.0, 1, "S", "0:01", "node /opt/codex"
+        )
+        child = tmux_status.ProcessInfo(
+            102, 101, 0.0, 1, "S", "0:01", "/usr/local/bin/codex"
+        )
+        arguments = {
+            101: ["node", "/opt/codex", "resume", codex_id],
+            102: ["codex", "resume", codex_id],
+        }
+        conversations = tmux_status.collect_agent_conversations(
+            self.pane(),
+            [wrapper, child],
+            open_paths=lambda _pid: [],
+            scrollback=lambda _pane_id: "",
+            working_directory=lambda pid: None if pid == 101 else "/project",
+            arguments=lambda pid: arguments[pid],
         )
 
         self.assertEqual(1, len(conversations))

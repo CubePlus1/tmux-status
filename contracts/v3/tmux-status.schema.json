@@ -254,7 +254,7 @@
           "items": { "enum": ["CPU", "MEM", "DEAD"] }
         },
         "session_id": { "type": "string", "pattern": "^\\$[0-9]+$" },
-        "session_created": { "type": "integer", "minimum": 1 },
+        "session_created": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "window_id": { "type": "string", "pattern": "^@[0-9]+$" },
         "server_instance_id": { "$ref": "#/$defs/serverInstanceId" },
         "pane_instance_id": { "type": "string", "minLength": 1 },

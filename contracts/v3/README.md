@@ -10,7 +10,7 @@ Rules:
 - A confirmed conversation requires process-associated file or CLI evidence, a UUID, nonempty `working_directory`, `stable_mapping_key` derived exactly as `<tool>:<conversation_id>`, and `resume_command`.
 - `pre_restart` is true exactly for `report_type: "recovery"` and false for status or snapshot reports.
 - Every conversation records its own `working_directory`; pane cwd is never substituted for a different agent cwd, and missing process-associated cwd keeps recovery unknown.
-- `process_instances` maps each signed 32-bit agent PID to exactly one start identity so PID reuse cannot merge unknown observations; it is never conversation-ID evidence.
+- `process_instances` maps each signed 32-bit agent PID to exactly one `<pid>:`-prefixed start identity so PID reuse cannot merge unknown observations; it is never conversation-ID evidence.
 - Missing or conflicting evidence is `unknown` with null ID/key/command.
 - PID, cwd, pane title, and recency are never identity evidence.
 - Payloads contain no prompt, response, reasoning, or pane content.

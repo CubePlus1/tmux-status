@@ -61,6 +61,25 @@ RUNTIME_NAMES = {
     "python2",
     "python3",
 }
+PYTHON_VALUE_OPTIONS = {"-W", "-X", "--check-hash-based-pycs"}
+NODE_VALUE_OPTIONS = {
+    "-C",
+    "-r",
+    "--conditions",
+    "--diagnostic-dir",
+    "--env-file",
+    "--experimental-loader",
+    "--heapsnapshot-signal",
+    "--icu-data-dir",
+    "--import",
+    "--inspect-port",
+    "--loader",
+    "--openssl-config",
+    "--redirect-warnings",
+    "--require",
+    "--snapshot-blob",
+    "--title",
+}
 ANSI = {
     "red": "\033[31m",
     "yellow": "\033[33m",
@@ -319,6 +338,30 @@ def descendants(root_pid: int, processes: Dict[int, ProcessInfo]) -> List[Proces
     return found
 
 
+def runtime_option_next_index(
+    runtime_name: str, tokens: Sequence[str], index: int
+) -> Optional[int]:
+    token = tokens[index]
+    if runtime_name.startswith("python"):
+        options = PYTHON_VALUE_OPTIONS
+        short_options = ("-W", "-X")
+    elif runtime_name in ("node", "nodejs"):
+        options = NODE_VALUE_OPTIONS
+        short_options = ("-C", "-r")
+    else:
+        return None
+    if token in options:
+        return index + 2
+    if any(token.startswith(option) and token != option for option in short_options):
+        return index + 1
+    if any(
+        option.startswith("--") and token.startswith(option + "=")
+        for option in options
+    ):
+        return index + 1
+    return None
+
+
 def executable_names_from_tokens(tokens: Sequence[str]) -> List[str]:
     if not tokens:
         return []
@@ -348,6 +391,10 @@ def executable_names_from_tokens(tokens: Sequence[str]) -> List[str]:
         index += 1
         while index < len(tokens):
             token = tokens[index]
+            next_index = runtime_option_next_index(runtime_name, tokens, index)
+            if next_index is not None:
+                index = next_index
+                continue
             if token == "-m" and index + 1 < len(tokens):
                 candidates.append(tokens[index + 1])
                 break
@@ -546,17 +593,10 @@ def tool_arguments_from_tokens(
         index += 1
         while index < len(tokens):
             token = tokens[index]
-            if runtime_name.startswith("python"):
-                if token in ("-X", "-W", "--check-hash-based-pycs"):
-                    index += 2
-                    continue
-                if (
-                    (token.startswith("-X") and token != "-X")
-                    or (token.startswith("-W") and token != "-W")
-                    or token.startswith("--check-hash-based-pycs=")
-                ):
-                    index += 1
-                    continue
+            next_index = runtime_option_next_index(runtime_name, tokens, index)
+            if next_index is not None:
+                index = next_index
+                continue
             if token == "-m" and index + 1 < len(tokens):
                 executable_index = index + 1
                 break
@@ -1205,7 +1245,7 @@ def collect_agent_conversations(
                 observed_cwd or absolute_command_cwd
             )
 
-        confirmed: Dict[Tuple[str, str], dict] = {}
+        confirmed: Dict[Tuple[str, Optional[str]], dict] = {}
         conflicts = []
         unavailable_reasons = []
         unresolved_pids = []
@@ -1300,6 +1340,21 @@ def collect_agent_conversations(
 
             if command_evidence:
                 if not process_cwds_confirmed[process.pid]:
+                    if is_runtime_wrapper_process(
+                        process, tool, process_argvs[process.pid]
+                    ):
+                        session_id, source = command_evidence
+                        entry = confirmed.setdefault(
+                            (session_id, None),
+                            {
+                                "pids": [],
+                                "source": source,
+                                "path": None,
+                                "cwd": None,
+                            },
+                        )
+                        entry["pids"].append(process.pid)
+                        continue
                     unavailable_reasons.append(
                         "PID {} has a CLI UUID but no process-associated working directory".format(
                             process.pid
@@ -1396,6 +1451,13 @@ def collect_agent_conversations(
             else:
                 remaining_unresolved.append(unresolved_pid)
         unresolved_pids = remaining_unresolved
+
+        for key in [key for key in confirmed if key[1] is None]:
+            entry = confirmed.pop(key)
+            unavailable_pids.extend(entry["pids"])
+            unavailable_reasons.append(
+                "runtime wrapper has a session UUID but no recoverable child cwd"
+            )
 
         if confirmed:
             for (session_id, _cwd), evidence in sorted(confirmed.items()):
