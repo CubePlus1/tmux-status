@@ -99,7 +99,10 @@ def validate(payload):
         )
         if pane.get("pane_instance_id") != expected_pane_instance_id:
             errors.append("pane_instance_id does not match pane identity fields")
-        for conversation in pane.get("agent_conversations", []):
+        conversations = pane.get("agent_conversations", [])
+        if pane.get("dead") and conversations:
+            errors.append("dead pane cannot contain agent conversations")
+        for conversation in conversations:
             for pid, instance_key in conversation.get(
                 "process_instances", {}
             ).items():

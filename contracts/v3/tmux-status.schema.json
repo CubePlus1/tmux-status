@@ -220,6 +220,17 @@
     "pane": {
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "dead": { "const": true } },
+            "required": ["dead"]
+          },
+          "then": {
+            "properties": { "agent_conversations": { "maxItems": 0 } }
+          }
+        }
+      ],
       "required": [
         "session", "window", "pane", "target", "pid", "command", "path",
         "attached", "selected", "dead", "cpu_percent", "memory_mb",

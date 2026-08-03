@@ -483,10 +483,12 @@ class TmuxStatusTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with rollout.open("r", encoding="utf-8") as held_file:
+                held_stat = os.fstat(held_file.fileno())
                 evidence = tmux_status.OpenProcessFile(
                     source_path=rollout,
                     read_path=Path("/dev/fd") / str(held_file.fileno()),
-                    inode=os.fstat(held_file.fileno()).st_ino,
+                    inode=held_stat.st_ino,
+                    device=held_stat.st_dev,
                 )
                 replacement = rollout.with_suffix(".replacement")
                 replacement.write_text(
@@ -526,6 +528,27 @@ class TmuxStatusTests(unittest.TestCase):
                     "grok",
                     switched_descriptor,
                     {"grok": root / "sessions"},
+                )
+            )
+
+    def test_grok_metadata_requires_captured_device_and_inode(self):
+        grok_id = "019fc532-c5ba-7b90-a199-5ecd6d99bf69"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            events = root / "sessions" / grok_id / "events.jsonl"
+            events.parent.mkdir(parents=True)
+            events.write_text("", encoding="utf-8")
+            event_stat = events.stat()
+            wrong_device = tmux_status.OpenProcessFile(
+                source_path=events,
+                read_path=events,
+                inode=event_stat.st_ino,
+                device=event_stat.st_dev + 1,
+            )
+
+            self.assertIsNone(
+                tmux_status.session_id_from_open_file(
+                    "grok", wrong_device, {"grok": root / "sessions"}
                 )
             )
 
@@ -1472,7 +1495,7 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertTrue(statuses[0].dead)
         self.assertEqual([], statuses[0].agent_conversations)
 
-    def test_rejects_old_process_tree_for_a_replacement_pane(self):
+    def test_refreshes_process_tree_for_a_replacement_pane(self):
         old_pane = self.pane()
         replacement_pane = self.pane()
         replacement_pane.pane_id = "%4"
@@ -1483,22 +1506,39 @@ class TmuxStatusTests(unittest.TestCase):
         with patch.object(
             tmux_status,
             "collect_panes",
-            side_effect=[[old_pane], [replacement_pane]],
-        ):
+            side_effect=[[old_pane], [replacement_pane], [replacement_pane]],
+        ) as collect_panes:
             with patch.object(
                 tmux_status, "collect_processes", return_value={100: replacement}
-            ):
+            ) as collect_processes:
                 with patch.object(
-                    tmux_status, "collect_agent_conversations"
+                    tmux_status, "collect_agent_conversations", return_value=[]
                 ) as collect_conversations:
                     with patch.object(tmux_status, "load_marks", return_value={}):
                         statuses = tmux_status.collect_statuses(
                             args, include_conversations=True
                         )
 
-        collect_conversations.assert_not_called()
+        self.assertEqual(3, collect_panes.call_count)
+        self.assertEqual(2, collect_processes.call_count)
+        collect_conversations.assert_called_once()
         self.assertEqual("%4", statuses[0].pane_id)
         self.assertEqual([], statuses[0].agent_conversations)
+
+    def test_fails_recovery_when_pane_instances_never_stabilize(self):
+        panes = []
+        for pane_id in ("%3", "%4", "%5", "%6"):
+            pane = self.pane()
+            pane.pane_id = pane_id
+            panes.append([pane])
+        args = tmux_status.build_parser().parse_args(["status", "--json"])
+        with patch.object(tmux_status, "collect_panes", side_effect=panes):
+            with patch.object(tmux_status, "collect_processes", return_value={}):
+                with self.assertRaisesRegex(
+                    tmux_status.TmuxStatusError,
+                    "changed repeatedly",
+                ):
+                    tmux_status.collect_statuses(args, include_conversations=True)
 
     def test_human_status_and_watch_skip_conversation_collection(self):
         status_args = tmux_status.build_parser().parse_args(["status"])

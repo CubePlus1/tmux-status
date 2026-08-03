@@ -111,7 +111,8 @@ class ProcessInfo:
 class OpenProcessFile:
     source_path: Path
     read_path: Path
-    inode: Optional[int]
+    inode: Optional[int] = None
+    device: Optional[int] = None
 
 
 @dataclass
@@ -819,7 +820,7 @@ def session_metadata_from_open_file(
     opened_file = (
         path
         if isinstance(path, OpenProcessFile)
-        else OpenProcessFile(path, path, None)
+        else OpenProcessFile(path, path)
     )
     source_path = opened_file.source_path
     session_root = (session_roots or {}).get(tool) or configured_session_root(
@@ -834,11 +835,12 @@ def session_metadata_from_open_file(
             with opened_file.read_path.open("rb") as session_file:
                 opened_stat = os.fstat(session_file.fileno())
                 if (
-                    opened_file.inode is not None
-                    and opened_stat.st_ino != opened_file.inode
+                    not opened_file_matches_capture(opened_file, opened_stat)
                 ):
                     return None
-                if os.fstat(session_file.fileno()).st_ino != opened_stat.st_ino:
+                if file_identity(os.fstat(session_file.fileno())) != file_identity(
+                    opened_stat
+                ):
                     return None
         except OSError:
             return None
@@ -852,10 +854,12 @@ def session_metadata_from_open_file(
     try:
         with opened_file.read_path.open("r", encoding="utf-8") as session_file:
             opened_stat = os.fstat(session_file.fileno())
-            if opened_file.inode is not None and opened_stat.st_ino != opened_file.inode:
+            if not opened_file_matches_capture(opened_file, opened_stat):
                 return None
             first_line = session_file.readline()
-            if os.fstat(session_file.fileno()).st_ino != opened_stat.st_ino:
+            if file_identity(os.fstat(session_file.fileno())) != file_identity(
+                opened_stat
+            ):
                 return None
         event = json.loads(first_line)
     except (OSError, ValueError):
@@ -882,6 +886,22 @@ def session_id_from_open_file(
     return metadata[0] if metadata else None
 
 
+def file_identity(file_stat: os.stat_result) -> Tuple[int, int]:
+    return file_stat.st_dev, file_stat.st_ino
+
+
+def opened_file_matches_capture(
+    opened_file: OpenProcessFile, opened_stat: os.stat_result
+) -> bool:
+    return (
+        (opened_file.inode is None or opened_file.inode == opened_stat.st_ino)
+        and (
+            opened_file.device is None
+            or opened_file.device == opened_stat.st_dev
+        )
+    )
+
+
 def list_open_paths(pid: int) -> List[OpenProcessFile]:
     proc_directory = Path("/proc") / str(pid) / "fd"
     if proc_directory.is_dir():
@@ -897,12 +917,20 @@ def list_open_paths(pid: int) -> List[OpenProcessFile]:
 
     if not shutil.which("lsof"):
         return []
-    result = run_command(["lsof", "-Ffin", "-p", str(pid)])
+    result = run_command(["lsof", "-FfDin", "-p", str(pid)])
     paths = []
     descriptor_inode = None
+    descriptor_device = None
     for line in result.stdout.splitlines():
         if line.startswith("f"):
             descriptor_inode = None
+            descriptor_device = None
+            continue
+        if line.startswith("D"):
+            try:
+                descriptor_device = int(line[1:], 0)
+            except ValueError:
+                descriptor_device = None
             continue
         if line.startswith("i"):
             try:
@@ -914,7 +942,9 @@ def list_open_paths(pid: int) -> List[OpenProcessFile]:
             continue
         path = Path(line[1:])
         if path.is_absolute():
-            paths.append(OpenProcessFile(path, path, descriptor_inode))
+            paths.append(
+                OpenProcessFile(path, path, descriptor_inode, descriptor_device)
+            )
     return paths
 
 
@@ -933,7 +963,9 @@ def capture_open_descriptor(descriptor: Path) -> Optional[OpenProcessFile]:
         or not first_target.is_absolute()
     ):
         return None
-    return OpenProcessFile(first_target, descriptor, first_stat.st_ino)
+    return OpenProcessFile(
+        first_target, descriptor, first_stat.st_ino, first_stat.st_dev
+    )
 
 
 def process_working_directory(pid: int) -> Optional[str]:
@@ -1929,17 +1961,25 @@ def collect_statuses(
     args: argparse.Namespace, *, include_conversations: bool
 ) -> List[PaneStatus]:
     panes = collect_panes()
-    processes = collect_processes() if panes else {}
-    # A second tmux snapshot after the process snapshot proves that recovery
-    # evidence still belongs to the listed pane/root rather than a reused PID.
-    if include_conversations and panes:
-        first_pane_instances = {pane_instance_id(pane) for pane in panes}
-        panes = collect_panes()
-        stable_pane_instances = first_pane_instances.intersection(
-            pane_instance_id(pane) for pane in panes
-        )
+    if include_conversations:
+        # Recovery requires one process snapshot bracketed by the same pane
+        # instances. Retry when a pane is created/respawned, then fail visibly
+        # rather than returning a silently incomplete recovery report.
+        for _ in range(3):
+            processes = collect_processes() if panes else {}
+            latest_panes = collect_panes()
+            if {pane_instance_id(pane) for pane in panes} == {
+                pane_instance_id(pane) for pane in latest_panes
+            }:
+                panes = latest_panes
+                break
+            panes = latest_panes
+        else:
+            raise TmuxStatusError(
+                "tmux pane set changed repeatedly during recovery collection"
+            )
     else:
-        stable_pane_instances = None
+        processes = collect_processes() if panes else {}
     return build_statuses(
         panes,
         processes,
@@ -1947,13 +1987,7 @@ def collect_statuses(
         args.cpu_threshold,
         args.memory_threshold,
         conversation_collector=(
-            (
-                lambda pane, tree: collect_agent_conversations(pane, tree)
-                if pane_instance_id(pane) in stable_pane_instances
-                else []
-            )
-            if stable_pane_instances is not None
-            else None
+            collect_agent_conversations if include_conversations else None
         ),
     )
 
