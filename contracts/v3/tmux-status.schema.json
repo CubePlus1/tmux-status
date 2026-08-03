@@ -122,6 +122,14 @@
               "properties": {
                 "conversation_id_status": { "const": "confirmed" },
                 "conversation_id": { "type": "string", "format": "uuid" },
+                "identity_source": {
+                  "enum": [
+                    "open_session_file",
+                    "cli_resume_argument",
+                    "cli_session_id_argument",
+                    "tmux_scrollback_resume_command"
+                  ]
+                },
                 "stable_mapping_key": { "type": "string", "minLength": 1 },
                 "resume_command": { "type": "string", "minLength": 1 }
               }
@@ -130,6 +138,7 @@
               "properties": {
                 "conversation_id_status": { "const": "unknown" },
                 "conversation_id": { "type": "null" },
+                "identity_source": { "enum": ["conflicting_evidence", "unavailable"] },
                 "stable_mapping_key": { "type": "null" },
                 "resume_command": { "type": "null" }
               }
@@ -229,6 +238,14 @@
           "then": {
             "properties": {
               "conversation_id": { "type": "string", "format": "uuid" },
+              "identity_source": {
+                "enum": [
+                  "open_session_file",
+                  "cli_resume_argument",
+                  "cli_session_id_argument",
+                  "tmux_scrollback_resume_command"
+                ]
+              },
               "stable_mapping_key": { "type": "string", "minLength": 1 },
               "resume_command": { "type": "string", "minLength": 1 }
             }
@@ -236,6 +253,7 @@
           "else": {
             "properties": {
               "conversation_id": { "type": "null" },
+              "identity_source": { "enum": ["conflicting_evidence", "unavailable"] },
               "stable_mapping_key": { "type": "null" },
               "resume_command": { "type": "null" }
             }
