@@ -30,6 +30,8 @@ def expected_resume(tool, conversation_id, cwd):
 
 
 def rounded_threshold_expectation(reported_value, threshold):
+    if threshold == 0:
+        return True
     rounding_radius = 0.05
     if reported_value - rounding_radius >= threshold:
         return True

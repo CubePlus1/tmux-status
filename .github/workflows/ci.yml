@@ -44,6 +44,12 @@ jobs:
           uvx --from check-jsonschema==0.33.3 check-jsonschema \
             --schemafile tmux-status.schema.json fixtures/*.json
           python3 validate_semantics.py fixtures/*.json
+          if jq '.generated_at = "2026-08-03T12:00:00+16:00"' \
+            fixtures/confirmed.json | uvx --from check-jsonschema==0.33.3 \
+            check-jsonschema --schemafile tmux-status.schema.json -; then
+            echo "unsupported PostgreSQL timezone offset unexpectedly passed" >&2
+            exit 1
+          fi
           if jq '.pane_count = 0' fixtures/confirmed.json | \
             python3 validate_semantics.py -; then
             echo "contradictory summary counts unexpectedly passed" >&2
@@ -70,6 +76,7 @@ jobs:
             '.panes[0].cpu_percent = 100' \
             '.panes[0].memory_mb = 2048' \
             '.panes[0].cpu_percent = 0 | .panes[0].anomalies = ["CPU"] | .anomaly_count = 1' \
+            '.thresholds.cpu_percent = 0 | .panes[0].cpu_percent = 0' \
             '.panes[0].dead = true | .panes[0].agent_conversations = [] | .recovery = [] | .confirmed_conversation_count = 0' \
             '.panes[0].agent_conversations[0].working_directory = ""' \
             '.panes[0].agent_conversations[0].working_directory = "project" | .panes[0].agent_conversations[0].resume_command = ("codex resume -C project " + .panes[0].agent_conversations[0].conversation_id) | .recovery[0].working_directory = "project" | .recovery[0].resume_command = ("codex resume -C project " + .recovery[0].conversation_id)' \
