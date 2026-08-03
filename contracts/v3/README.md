@@ -25,4 +25,4 @@ uvx --from check-jsonschema==0.33.3 check-jsonschema \
 python3 validate_semantics.py fixtures/*.json
 ```
 
-Files under `fixtures-invalid/` must fail schema validation. `validate_semantics.py` enforces ordered recovery projection, summary counts, server identity, stable keys, and resume commands that JSON Schema cannot compare across fields.
+Files under `fixtures-invalid/` must fail schema validation. `validate_semantics.py` enforces ordered recovery projection, summary counts, producer version consistency, legacy/v3 pane aliases, derived pane-instance identity, server identity, stable keys, and resume commands that JSON Schema cannot compare across fields.

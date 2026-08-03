@@ -31,6 +31,9 @@ def validate(payload):
     errors = []
     panes = payload.get("panes", [])
     recovery = payload.get("recovery", [])
+    producer = payload.get("producer", {})
+    if producer.get("version") != payload.get("tool_version"):
+        errors.append("producer.version does not match tool_version")
     if payload.get("pane_count") != len(panes):
         errors.append("pane_count does not equal len(panes)")
     anomaly_count = sum(bool(pane.get("anomalies")) for pane in panes)
@@ -53,6 +56,36 @@ def validate(payload):
 
     projected = []
     for pane in panes:
+        legacy_aliases = (
+            ("session", pane.get("tmux_session_name")),
+            (
+                "window",
+                "{}:{}".format(
+                    pane.get("tmux_window_index"), pane.get("tmux_window_name")
+                ),
+            ),
+            ("pane", pane.get("pane_id")),
+            ("target", pane.get("tmux_target")),
+            ("pid", pane.get("pane_pid")),
+            ("path", pane.get("working_directory")),
+        )
+        for legacy_field, v3_value in legacy_aliases:
+            if pane.get(legacy_field) != v3_value:
+                errors.append(
+                    "{} does not match its v3 pane identity field".format(
+                        legacy_field
+                    )
+                )
+        expected_pane_instance_id = "{}:{}:{}:{}:{}:{}".format(
+            pane.get("server_instance_id"),
+            pane.get("session_id"),
+            pane.get("session_created"),
+            pane.get("window_id"),
+            pane.get("pane_id"),
+            pane.get("pane_pid"),
+        )
+        if pane.get("pane_instance_id") != expected_pane_instance_id:
+            errors.append("pane_instance_id does not match pane identity fields")
         for conversation in pane.get("agent_conversations", []):
             entry = {field: conversation[field] for field in RECOVERY_FIELDS}
             entry.update(

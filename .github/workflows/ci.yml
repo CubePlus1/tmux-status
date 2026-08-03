@@ -49,6 +49,16 @@ jobs:
             echo "contradictory summary counts unexpectedly passed" >&2
             exit 1
           fi
+          for mutation in \
+            '.producer.version = "0.3.1"' \
+            '.panes[0].pane_id = "%99"' \
+            '.panes[0].pane_instance_id = "wrong"'; do
+            if jq "$mutation" fixtures/confirmed.json | \
+              python3 validate_semantics.py -; then
+              echo "contradictory v3 identity unexpectedly passed: $mutation" >&2
+              exit 1
+            fi
+          done
           for fixture in fixtures-invalid/*.json; do
             if uvx --from check-jsonschema==0.33.3 check-jsonschema \
               --schemafile tmux-status.schema.json "$fixture"; then
