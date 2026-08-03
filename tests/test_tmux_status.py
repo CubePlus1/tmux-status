@@ -16,13 +16,13 @@ SPEC.loader.exec_module(tmux_status)
 
 class TmuxStatusTests(unittest.TestCase):
     def setUp(self):
-        instance_key_patch = patch.object(
+        self.instance_key_patch = patch.object(
             tmux_status,
             "process_instance_key",
             side_effect=lambda pid: "{}:test-process-start".format(pid),
         )
-        instance_key_patch.start()
-        self.addCleanup(instance_key_patch.stop)
+        self.instance_key_patch.start()
+        self.addCleanup(self.instance_key_patch.stop)
 
     @staticmethod
     def pane(path="/tmp/project"):
@@ -899,6 +899,30 @@ class TmuxStatusTests(unittest.TestCase):
         stat_text = "101 (codex worker) {}".format(" ".join(fields_after_comm))
         self.assertEqual("22", tmux_status.linux_process_start_time(stat_text))
 
+    def test_non_proc_process_keys_require_subsecond_start_identity(self):
+        pid = 987654
+        self.instance_key_patch.stop()
+        try:
+            with patch.object(tmux_status.sys, "platform", "darwin"):
+                with patch.object(
+                    tmux_status,
+                    "darwin_process_start_time",
+                    return_value="1785783501:123456",
+                ):
+                    self.assertEqual(
+                        "987654:darwin:1785783501:123456",
+                        tmux_status.process_instance_key(pid),
+                    )
+                with patch.object(
+                    tmux_status, "darwin_process_start_time", return_value=None
+                ):
+                    first = tmux_status.process_instance_key(pid)
+                    second = tmux_status.process_instance_key(pid)
+                    self.assertNotEqual(first, second)
+                    self.assertIn(":unverified:", first)
+        finally:
+            self.instance_key_patch.start()
+
     def test_unmatched_process_remains_unknown_beside_confirmed_conversation(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
         pane = self.pane()
@@ -1091,10 +1115,34 @@ class TmuxStatusTests(unittest.TestCase):
             scrollback=lambda _pane_id: "codex resume {}\n".format(codex_id),
         )
 
+        self.assertEqual(2, len(conversations))
+        self.assertTrue(
+            all(
+                conversation.conversation_id_status == "unknown"
+                and len(conversation.process_instances) == 1
+                and conversation.conversation_id is None
+                for conversation in conversations
+            )
+        )
+
+    def test_unknown_runtime_wrapper_and_native_child_stay_one_invocation(self):
+        pane = self.pane()
+        wrapper = tmux_status.ProcessInfo(
+            101, 100, 0.0, 1, "S", "0:01", "python3.11 -m codex"
+        )
+        child = tmux_status.ProcessInfo(
+            102, 101, 0.0, 1, "S", "0:01", "/usr/local/bin/codex"
+        )
+        conversations = tmux_status.collect_agent_conversations(
+            pane,
+            [wrapper, child],
+            open_paths=lambda _pid: [],
+            scrollback=lambda _pane_id: "",
+            working_directory=lambda _pid: "/tmp/project",
+        )
+
         self.assertEqual(1, len(conversations))
-        self.assertEqual("unknown", conversations[0].conversation_id_status)
         self.assertEqual({"101", "102"}, set(conversations[0].process_instances))
-        self.assertIsNone(conversations[0].conversation_id)
 
     def test_human_status_and_watch_skip_conversation_collection(self):
         status_args = tmux_status.build_parser().parse_args(["status"])

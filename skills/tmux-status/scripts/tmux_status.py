@@ -2,6 +2,8 @@
 """Inspect tmux panes, their process trees, and persisted activity marks."""
 
 import argparse
+import ctypes
+import ctypes.util
 import json
 import math
 import os
@@ -860,6 +862,56 @@ def linux_process_start_time(stat_text: str) -> Optional[str]:
     return fields_after_comm[19] if len(fields_after_comm) > 19 else None
 
 
+class DarwinProcessInfo(ctypes.Structure):
+    _fields_ = [
+        ("flags", ctypes.c_uint32),
+        ("status", ctypes.c_uint32),
+        ("xstatus", ctypes.c_uint32),
+        ("pid", ctypes.c_uint32),
+        ("ppid", ctypes.c_uint32),
+        ("uid", ctypes.c_uint32),
+        ("gid", ctypes.c_uint32),
+        ("ruid", ctypes.c_uint32),
+        ("rgid", ctypes.c_uint32),
+        ("svuid", ctypes.c_uint32),
+        ("svgid", ctypes.c_uint32),
+        ("reserved", ctypes.c_uint32),
+        ("comm", ctypes.c_char * 16),
+        ("name", ctypes.c_char * 32),
+        ("nfiles", ctypes.c_uint32),
+        ("pgid", ctypes.c_uint32),
+        ("pjobc", ctypes.c_uint32),
+        ("tdev", ctypes.c_uint32),
+        ("tpgid", ctypes.c_uint32),
+        ("nice", ctypes.c_int32),
+        ("start_seconds", ctypes.c_uint64),
+        ("start_microseconds", ctypes.c_uint64),
+    ]
+
+
+def darwin_process_start_time(pid: int) -> Optional[str]:
+    library_path = ctypes.util.find_library("proc")
+    if not library_path:
+        return None
+    try:
+        libproc = ctypes.CDLL(library_path)
+        process_info = DarwinProcessInfo()
+        written = libproc.proc_pidinfo(
+            pid,
+            3,  # PROC_PIDTBSDINFO
+            0,
+            ctypes.byref(process_info),
+            ctypes.sizeof(process_info),
+        )
+    except (AttributeError, OSError):
+        return None
+    if written != ctypes.sizeof(process_info) or process_info.start_seconds <= 0:
+        return None
+    return "{}:{}".format(
+        process_info.start_seconds, process_info.start_microseconds
+    )
+
+
 def process_instance_key(pid: int) -> str:
     proc_stat = Path("/proc") / str(pid) / "stat"
     boot_id_path = Path("/proc/sys/kernel/random/boot_id")
@@ -871,10 +923,10 @@ def process_instance_key(pid: int) -> str:
     except OSError:
         pass
 
-    result = run_command(["ps", "-o", "lstart=", "-p", str(pid)])
-    started_at = " ".join(result.stdout.split())
-    if result.returncode == 0 and started_at:
-        return "{}:{}".format(pid, started_at)
+    if sys.platform == "darwin":
+        started_at = darwin_process_start_time(pid)
+        if started_at:
+            return "{}:darwin:{}".format(pid, started_at)
     return "{}:unverified:{}".format(pid, uuid.uuid4())
 
 
@@ -976,18 +1028,40 @@ def append_unknown_conversations(
     process_pids: List[int],
     process_cwds: Dict[int, str],
     process_keys: Dict[int, str],
+    processes_by_pid: Dict[int, ProcessInfo],
     evidence: str,
     identity_source: str = "unavailable",
 ) -> None:
-    pids_by_cwd: Dict[str, List[int]] = {}
-    for pid in process_pids:
-        pids_by_cwd.setdefault(process_cwds[pid], []).append(pid)
-    for cwd, cwd_pids in sorted(pids_by_cwd.items()):
+    remaining = set(process_pids)
+    invocation_groups = []
+    while remaining:
+        group = {min(remaining)}
+        changed = True
+        while changed:
+            changed = False
+            for candidate in sorted(remaining - group):
+                if any(
+                    is_runtime_wrapper_child_pair(
+                        candidate, member, tool, processes_by_pid
+                    )
+                    for member in group
+                ):
+                    group.add(candidate)
+                    changed = True
+        remaining -= group
+        invocation_groups.append(sorted(group))
+    for group_pids in invocation_groups:
+        native_pids = [
+            pid
+            for pid in group_pids
+            if is_native_tool_process(processes_by_pid[pid], tool)
+        ]
+        cwd = process_cwds[native_pids[0] if native_pids else group_pids[0]]
         conversations.append(
             unknown_conversation(
                 tool,
-                cwd_pids,
-                [process_keys[pid] for pid in cwd_pids],
+                group_pids,
+                [process_keys[pid] for pid in group_pids],
                 evidence,
                 cwd,
                 identity_source,
@@ -1245,6 +1319,7 @@ def collect_agent_conversations(
                     ),
                     process_cwds,
                     process_keys,
+                    processes_by_pid,
                     "; ".join(evidence_parts),
                     "conflicting_evidence" if conflicts else "unavailable",
                 )
@@ -1263,6 +1338,7 @@ def collect_agent_conversations(
                 sorted(set(conflicting_pids + unavailable_pids + unresolved_pids)),
                 process_cwds,
                 process_keys,
+                processes_by_pid,
                 "; ".join(conflicts + unavailable_reasons),
                 "conflicting_evidence" if conflicts else "unavailable",
             )
@@ -1276,6 +1352,7 @@ def collect_agent_conversations(
                 process_pids,
                 process_cwds,
                 process_keys,
+                processes_by_pid,
                 "cannot associate one scrollback UUID with multiple tool processes",
                 "conflicting_evidence",
             )
@@ -1291,6 +1368,7 @@ def collect_agent_conversations(
                 process_pids,
                 process_cwds,
                 process_keys,
+                processes_by_pid,
                 "one resume UUID exists in scrollback but cannot be associated with the live process",
             )
         elif len(scrollback_ids) > 1:
@@ -1300,6 +1378,7 @@ def collect_agent_conversations(
                 process_pids,
                 process_cwds,
                 process_keys,
+                processes_by_pid,
                 "multiple distinct resume UUIDs found in tmux scrollback",
                 "conflicting_evidence",
             )
@@ -1310,6 +1389,7 @@ def collect_agent_conversations(
                 process_pids,
                 process_cwds,
                 process_keys,
+                processes_by_pid,
                 "no explicit UUID found in open session files, CLI arguments, or tmux scrollback",
             )
     return conversations
