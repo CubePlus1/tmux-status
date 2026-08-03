@@ -66,7 +66,8 @@ For every detected Codex or Grok process, keep the full mapping found in
 
 - `tmux_session_name`, `tmux_window_index`, and `tmux_pane_index`;
 - `pane_id` and `pane_pid`;
-- agent `process_pids` and the conversation-specific `working_directory`;
+- agent `process_pids`, one process-incarnation `process_instance_keys` entry
+  per PID, and the conversation-specific `working_directory`;
 - `conversation_id_kind`, `conversation_id`, `conversation_id_status`,
   `identity_source`, and `source_path`;
 - `stable_mapping_key` and `resume_command`.
@@ -75,9 +76,9 @@ Treat the tmux session name and agent conversation/thread ID as different
 identities. Never report only `tools: ["codex"]` or `tools: ["grok"]` when the
 task is to record or recover agent work.
 
-Only accept an explicit UUID confirmed from an open rollout/session file, a live
-CLI resume/session-ID argument, or one unambiguous resume command in recent tmux
-scrollback. The CLI applies that order automatically. Do not infer an ID from a
+Only accept an explicit UUID confirmed from an open rollout/session file or a
+live CLI resume/session-ID argument associated with the current process. A UUID
+found only in tmux scrollback remains diagnostic and unknown. Do not infer an ID from a
 PID, working directory, title, or most-recent session. If
 `conversation_id_status` is `unknown`, preserve `unknown` in the result and tell
 the user that automatic resume is unavailable for that entry.

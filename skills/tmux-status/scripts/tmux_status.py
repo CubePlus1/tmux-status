@@ -120,6 +120,7 @@ class AgentConversation:
     source_path: Optional[str]
     working_directory: str
     process_pids: List[int]
+    process_instance_keys: List[str]
     stable_mapping_key: Optional[str]
     resume_command: Optional[str]
     evidence: str
@@ -657,6 +658,24 @@ def process_working_directory(pid: int) -> Optional[str]:
     return None
 
 
+def process_instance_key(pid: int) -> str:
+    proc_stat = Path("/proc") / str(pid) / "stat"
+    boot_id_path = Path("/proc/sys/kernel/random/boot_id")
+    try:
+        stat_fields = proc_stat.read_text(encoding="utf-8").split()
+        boot_id = boot_id_path.read_text(encoding="utf-8").strip()
+        if len(stat_fields) > 21 and boot_id:
+            return "{}:{}:{}".format(pid, boot_id, stat_fields[21])
+    except OSError:
+        pass
+
+    result = run_command(["ps", "-o", "lstart=", "-p", str(pid)])
+    started_at = " ".join(result.stdout.split())
+    if result.returncode == 0 and started_at:
+        return "{}:{}".format(pid, started_at)
+    return "{}:unverified:{}".format(pid, uuid.uuid4())
+
+
 def resolve_working_directory(value: Optional[str], fallback: str) -> str:
     if not value:
         return fallback
@@ -705,9 +724,11 @@ def confirmed_conversation(
     conversation_id: str,
     source: str,
     process_pids: List[int],
+    process_instance_keys: List[str],
     cwd: str,
     source_path: Optional[str] = None,
 ) -> AgentConversation:
+    processes = sorted(zip(process_pids, process_instance_keys))
     return AgentConversation(
         tool=tool,
         conversation_id=conversation_id,
@@ -716,7 +737,8 @@ def confirmed_conversation(
         identity_source=source,
         source_path=source_path,
         working_directory=cwd,
-        process_pids=sorted(process_pids),
+        process_pids=[pid for pid, _key in processes],
+        process_instance_keys=[key for _pid, key in processes],
         stable_mapping_key="{}:{}".format(tool, conversation_id),
         resume_command=resume_command(tool, conversation_id, cwd),
         evidence="explicit UUID from {}".format(source),
@@ -726,10 +748,12 @@ def confirmed_conversation(
 def unknown_conversation(
     tool: str,
     process_pids: List[int],
+    process_instance_keys: List[str],
     evidence: str,
     cwd: str,
     identity_source: str = "unavailable",
 ) -> AgentConversation:
+    processes = sorted(zip(process_pids, process_instance_keys))
     return AgentConversation(
         tool=tool,
         conversation_id=None,
@@ -738,7 +762,8 @@ def unknown_conversation(
         identity_source=identity_source,
         source_path=None,
         working_directory=cwd,
-        process_pids=sorted(process_pids),
+        process_pids=[pid for pid, _key in processes],
+        process_instance_keys=[key for _pid, key in processes],
         stable_mapping_key=None,
         resume_command=None,
         evidence=evidence,
@@ -750,6 +775,7 @@ def append_unknown_conversations(
     tool: str,
     process_pids: List[int],
     process_cwds: Dict[int, str],
+    process_keys: Dict[int, str],
     evidence: str,
     identity_source: str = "unavailable",
 ) -> None:
@@ -761,6 +787,7 @@ def append_unknown_conversations(
             unknown_conversation(
                 tool,
                 cwd_pids,
+                [process_keys[pid] for pid in cwd_pids],
                 evidence,
                 cwd,
                 identity_source,
@@ -774,6 +801,7 @@ def collect_agent_conversations(
     open_paths: Callable[[int], List[Path]] = list_open_paths,
     scrollback: Callable[[str], str] = capture_pane_scrollback,
     working_directory: Callable[[int], Optional[str]] = process_working_directory,
+    instance_key: Callable[[int], str] = process_instance_key,
 ) -> List[AgentConversation]:
     tool_processes: Dict[str, List[ProcessInfo]] = {}
     for process in tree:
@@ -788,18 +816,21 @@ def collect_agent_conversations(
     processes_by_pid = {process.pid: process for process in tree}
     for tool, matching_processes in sorted(tool_processes.items()):
         process_cwds = {}
+        process_keys = {}
         for process in matching_processes:
             observed_cwd = working_directory(process.pid) or pane.current_path
             process_cwds[process.pid] = resolve_working_directory(
                 working_directory_from_command(tool, process.command),
                 observed_cwd,
             )
+            process_keys[process.pid] = instance_key(process.pid)
 
         confirmed: Dict[Tuple[str, str], dict] = {}
         conflicts = []
         unresolved_pids = []
         conflicting_pids = []
         for process in matching_processes:
+            command_evidence = session_id_from_command(tool, process.command)
             file_evidence: Dict[str, Tuple[str, Optional[str]]] = {}
             for path in open_paths(process.pid):
                 metadata = session_metadata_from_open_file(tool, path)
@@ -810,6 +841,14 @@ def collect_agent_conversations(
                 session_id, (source_path, metadata_cwd) = next(
                     iter(file_evidence.items())
                 )
+                if command_evidence and command_evidence[0] != session_id:
+                    conflicts.append(
+                        "PID {} file UUID disagrees with explicit CLI UUID".format(
+                            process.pid
+                        )
+                    )
+                    conflicting_pids.append(process.pid)
+                    continue
                 cwd = resolve_working_directory(
                     metadata_cwd, process_cwds[process.pid]
                 )
@@ -833,7 +872,6 @@ def collect_agent_conversations(
                 conflicting_pids.append(process.pid)
                 continue
 
-            command_evidence = session_id_from_command(tool, process.command)
             if command_evidence:
                 session_id, source = command_evidence
                 cwd = process_cwds[process.pid]
@@ -875,6 +913,7 @@ def collect_agent_conversations(
                         session_id,
                         evidence["source"],
                         evidence["pids"],
+                        [process_keys[pid] for pid in evidence["pids"]],
                         evidence["cwd"],
                         evidence["path"],
                     )
@@ -892,6 +931,7 @@ def collect_agent_conversations(
                     tool,
                     sorted(conflicting_pids + unresolved_pids),
                     process_cwds,
+                    process_keys,
                     "; ".join(evidence_parts),
                     "conflicting_evidence" if conflicts else "unavailable",
                 )
@@ -909,6 +949,7 @@ def collect_agent_conversations(
                 tool,
                 sorted(conflicting_pids + unresolved_pids),
                 process_cwds,
+                process_keys,
                 "; ".join(conflicts),
                 "conflicting_evidence",
             )
@@ -921,6 +962,7 @@ def collect_agent_conversations(
                 tool,
                 process_pids,
                 process_cwds,
+                process_keys,
                 "cannot associate one scrollback UUID with multiple tool processes",
                 "conflicting_evidence",
             )
@@ -930,14 +972,13 @@ def collect_agent_conversations(
             pane_scrollback = scrollback(pane.pane_id)
         scrollback_ids = session_ids_from_scrollback(tool, pane_scrollback)
         if len(scrollback_ids) == 1:
-            conversations.append(
-                confirmed_conversation(
-                    tool,
-                    scrollback_ids[0],
-                    "tmux_scrollback_resume_command",
-                    process_pids,
-                    process_cwds[process_pids[0]],
-                )
+            append_unknown_conversations(
+                conversations,
+                tool,
+                process_pids,
+                process_cwds,
+                process_keys,
+                "one resume UUID exists in scrollback but cannot be associated with the live process",
             )
         elif len(scrollback_ids) > 1:
             append_unknown_conversations(
@@ -945,6 +986,7 @@ def collect_agent_conversations(
                 tool,
                 process_pids,
                 process_cwds,
+                process_keys,
                 "multiple distinct resume UUIDs found in tmux scrollback",
                 "conflicting_evidence",
             )
@@ -954,6 +996,7 @@ def collect_agent_conversations(
                 tool,
                 process_pids,
                 process_cwds,
+                process_keys,
                 "no explicit UUID found in open session files, CLI arguments, or tmux scrollback",
             )
     return conversations
@@ -1249,6 +1292,7 @@ def recovery_entries(statuses: List[PaneStatus]) -> List[dict]:
                     "pane_id": status.pane_id,
                     "pane_pid": status.pane_pid,
                     "process_pids": conversation.process_pids,
+                    "process_instance_keys": conversation.process_instance_keys,
                     "working_directory": conversation.working_directory,
                     "resume_command": conversation.resume_command,
                 }
@@ -1375,6 +1419,9 @@ def render_markdown(payload: dict) -> str:
                     ),
                     "  - agent PID(s): {}".format(
                         ", ".join(str(pid) for pid in conversation["process_pids"])
+                    ),
+                    "  - process instance key(s): {}".format(
+                        ", ".join(conversation["process_instance_keys"])
                     ),
                     "  - identity source: {}".format(
                         markdown_code(conversation["identity_source"])

@@ -467,12 +467,16 @@ class TmuxStatusTests(unittest.TestCase):
             [process],
             open_paths=lambda _pid: [],
             scrollback=lambda _pane_id: "",
+            instance_key=lambda pid: "{}:process-start-a".format(pid),
         )
         self.assertEqual(1, len(conversations))
         self.assertIsNone(conversations[0].conversation_id)
         self.assertEqual("unknown", conversations[0].conversation_id_status)
         self.assertIsNone(conversations[0].stable_mapping_key)
         self.assertIsNone(conversations[0].resume_command)
+        self.assertEqual(
+            ["98765:process-start-a"], conversations[0].process_instance_keys
+        )
         self.assertNotIn("98765", conversations[0].evidence)
 
     def test_conflicting_open_session_files_are_unknown(self):
@@ -514,7 +518,7 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertIsNone(conversations[0].conversation_id)
         self.assertIn("multiple", conversations[0].evidence)
 
-    def test_uses_unique_resume_uuid_from_scrollback(self):
+    def test_does_not_confirm_unassociated_scrollback_uuid(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
         pane = self.pane()
         process = tmux_status.ProcessInfo(
@@ -528,10 +532,44 @@ class TmuxStatusTests(unittest.TestCase):
                 codex_id
             ),
         )
-        self.assertEqual(codex_id, conversations[0].conversation_id)
-        self.assertEqual(
-            "tmux_scrollback_resume_command", conversations[0].identity_source
+        self.assertIsNone(conversations[0].conversation_id)
+        self.assertEqual("unknown", conversations[0].conversation_id_status)
+        self.assertIn("cannot be associated", conversations[0].evidence)
+
+    def test_file_and_cli_identity_disagreement_is_conflicting(self):
+        file_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        cli_id = "019fb21f-84c9-7692-8371-1f9aa3e75401"
+        pane = self.pane()
+        process = tmux_status.ProcessInfo(
+            101,
+            100,
+            0.0,
+            1,
+            "S",
+            "0:01",
+            "codex resume {}".format(cli_id),
         )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sessions" / "2026" / "08" / "03"
+            path.mkdir(parents=True)
+            rollout = path / "rollout-{}.jsonl".format(file_id)
+            rollout.write_text(
+                json.dumps({"type": "session_meta", "payload": {"id": file_id}})
+                + "\n",
+                encoding="utf-8",
+            )
+            conversations = tmux_status.collect_agent_conversations(
+                pane,
+                [process],
+                open_paths=lambda _pid: [rollout],
+                scrollback=lambda _pane_id: "",
+                working_directory=lambda _pid: "/tmp/project",
+            )
+
+        self.assertEqual(1, len(conversations))
+        self.assertEqual("unknown", conversations[0].conversation_id_status)
+        self.assertEqual("conflicting_evidence", conversations[0].identity_source)
+        self.assertIsNone(conversations[0].conversation_id)
 
     def test_multiple_processes_remain_unknown_despite_one_scrollback_uuid(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"

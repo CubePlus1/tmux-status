@@ -77,6 +77,12 @@
       "uniqueItems": true,
       "items": { "type": "integer", "minimum": 1 }
     },
+    "processInstanceKeys": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    },
     "conversationCommon": {
       "type": "object",
       "required": [
@@ -88,6 +94,7 @@
         "source_path",
         "working_directory",
         "process_pids",
+        "process_instance_keys",
         "stable_mapping_key",
         "resume_command",
         "evidence"
@@ -102,7 +109,6 @@
             "open_session_file",
             "cli_resume_argument",
             "cli_session_id_argument",
-            "tmux_scrollback_resume_command",
             "conflicting_evidence",
             "unavailable"
           ]
@@ -110,6 +116,7 @@
         "source_path": { "type": ["string", "null"] },
         "working_directory": { "type": "string" },
         "process_pids": { "$ref": "#/$defs/processPids" },
+        "process_instance_keys": { "$ref": "#/$defs/processInstanceKeys" },
         "stable_mapping_key": { "type": ["string", "null"] },
         "resume_command": { "type": ["string", "null"] },
         "evidence": { "type": "string", "minLength": 1 }
@@ -141,8 +148,7 @@
                   "enum": [
                     "open_session_file",
                     "cli_resume_argument",
-                    "cli_session_id_argument",
-                    "tmux_scrollback_resume_command"
+                    "cli_session_id_argument"
                   ]
                 },
                 "stable_mapping_key": { "type": "string", "minLength": 1 },
@@ -229,7 +235,8 @@
         "tool", "conversation_id", "conversation_id_status",
         "conversation_id_kind", "identity_source", "source_path",
         "stable_mapping_key", "tmux_target", "tmux_session_name", "pane_id",
-        "pane_pid", "process_pids", "working_directory", "resume_command"
+        "pane_pid", "process_pids", "process_instance_keys",
+        "working_directory", "resume_command"
       ],
       "properties": {
         "tool": { "enum": ["codex", "grok"] },
@@ -244,6 +251,7 @@
         "pane_id": { "type": "string" },
         "pane_pid": { "type": "integer", "minimum": 1 },
         "process_pids": { "$ref": "#/$defs/processPids" },
+        "process_instance_keys": { "$ref": "#/$defs/processInstanceKeys" },
         "working_directory": { "type": "string" },
         "resume_command": { "type": ["string", "null"] }
       },
@@ -270,8 +278,7 @@
                 "enum": [
                   "open_session_file",
                   "cli_resume_argument",
-                  "cli_session_id_argument",
-                  "tmux_scrollback_resume_command"
+                  "cli_session_id_argument"
                 ]
               },
               "stable_mapping_key": { "type": "string", "minLength": 1 },

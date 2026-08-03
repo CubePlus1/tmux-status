@@ -26,6 +26,7 @@
       "pane_id": "%3",
       "pane_pid": 100,
       "process_pids": [101],
+      "process_instance_keys": ["101:Mon Aug 3 12:00:00 2026"],
       "working_directory": "/tmp/project",
       "resume_command": "codex resume -C /tmp/project 019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
     }
@@ -73,6 +74,7 @@
           "source_path": "/tmp/codex/sessions/rollout.jsonl",
           "working_directory": "/tmp/project",
           "process_pids": [101],
+          "process_instance_keys": ["101:Mon Aug 3 12:00:00 2026"],
           "stable_mapping_key": "codex:019fc5d1-40e4-75a2-89f2-188ae5efb2c4",
           "resume_command": "codex resume -C /tmp/project 019fc5d1-40e4-75a2-89f2-188ae5efb2c4",
           "evidence": "explicit UUID from open_session_file"

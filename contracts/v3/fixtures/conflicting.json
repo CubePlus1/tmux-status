@@ -17,7 +17,8 @@
     "conversation_id_kind": "codex_thread_id", "identity_source": "conflicting_evidence",
     "source_path": null, "stable_mapping_key": null, "tmux_target": "work:0.0",
     "tmux_session_name": "work", "pane_id": "%3", "pane_pid": 100,
-    "process_pids": [101], "working_directory": "/tmp/project", "resume_command": null
+    "process_pids": [101], "process_instance_keys": ["101:Mon Aug 3 12:00:00 2026"],
+    "working_directory": "/tmp/project", "resume_command": null
   }],
   "panes": [{
     "session": "work", "window": "0:code", "pane": "%3", "target": "work:0.0",
@@ -34,7 +35,8 @@
       "tool": "codex", "conversation_id": null, "conversation_id_status": "unknown",
       "conversation_id_kind": "codex_thread_id", "identity_source": "conflicting_evidence",
       "source_path": null, "working_directory": "/tmp/project",
-      "process_pids": [101], "stable_mapping_key": null,
+      "process_pids": [101], "process_instance_keys": ["101:Mon Aug 3 12:00:00 2026"],
+      "stable_mapping_key": null,
       "resume_command": null, "evidence": "multiple distinct resume UUIDs found"
     }]
   }]
