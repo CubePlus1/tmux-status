@@ -161,7 +161,15 @@
           "if": { "properties": { "tool": { "const": "codex" } } },
           "then": {
             "properties": {
-              "conversation_id_kind": { "const": "codex_thread_id" }
+              "conversation_id_kind": { "const": "codex_thread_id" },
+              "identity_source": {
+                "enum": [
+                  "open_session_file",
+                  "cli_resume_argument",
+                  "conflicting_evidence",
+                  "unavailable"
+                ]
+              }
             }
           },
           "else": {
@@ -330,7 +338,15 @@
           "if": { "properties": { "tool": { "const": "codex" } } },
           "then": {
             "properties": {
-              "conversation_id_kind": { "const": "codex_thread_id" }
+              "conversation_id_kind": { "const": "codex_thread_id" },
+              "identity_source": {
+                "enum": [
+                  "open_session_file",
+                  "cli_resume_argument",
+                  "conflicting_evidence",
+                  "unavailable"
+                ]
+              }
             }
           },
           "else": {

@@ -164,6 +164,14 @@ def validate(payload):
                     )
             elif source_path is not None:
                 errors.append("non-file identity requires a null source_path")
+            if (
+                conversation.get("conversation_id_status") == "confirmed"
+                and conversation.get("tool") == "codex"
+                and identity_source == "cli_session_id_argument"
+            ):
+                errors.append(
+                    "Codex identity cannot use cli_session_id_argument evidence"
+                )
             for pid, instance_key in conversation.get(
                 "process_instances", {}
             ).items():

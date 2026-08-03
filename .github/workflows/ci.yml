@@ -72,6 +72,7 @@ jobs:
             '.panes[0].agent_conversations[0].source_path = null | .recovery[0].source_path = null' \
             '.panes[0].agent_conversations[0].source_path = "sessions/rollout.jsonl" | .recovery[0].source_path = "sessions/rollout.jsonl"' \
             '.panes[0].agent_conversations[0].identity_source = "cli_resume_argument" | .recovery[0].identity_source = "cli_resume_argument"' \
+            '.panes[0].agent_conversations[0].identity_source = "cli_session_id_argument" | .panes[0].agent_conversations[0].source_path = null | .recovery[0].identity_source = "cli_session_id_argument" | .recovery[0].source_path = null' \
             '.panes[0].agent_conversations[0].source_path = "session\u0000path" | .recovery[0].source_path = "session\u0000path"'; do
             if jq "$mutation" fixtures/confirmed.json | \
               python3 validate_semantics.py -; then
