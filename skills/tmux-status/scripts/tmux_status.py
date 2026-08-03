@@ -791,10 +791,21 @@ def collect_agent_conversations(
             )
             continue
 
+        process_pids = [process.pid for process in matching_processes]
+        if len(matching_processes) != 1:
+            conversations.append(
+                unknown_conversation(
+                    tool,
+                    process_pids,
+                    "cannot associate one scrollback UUID with multiple tool processes",
+                    "conflicting_evidence",
+                )
+            )
+            continue
+
         if pane_scrollback is None:
             pane_scrollback = scrollback(pane.pane_id)
         scrollback_ids = session_ids_from_scrollback(tool, pane_scrollback)
-        process_pids = [process.pid for process in matching_processes]
         if len(scrollback_ids) == 1:
             conversations.append(
                 confirmed_conversation(
@@ -1080,7 +1091,9 @@ def render_table(statuses: List[PaneStatus], use_color: bool) -> str:
     return "\n".join(lines)
 
 
-def collect_statuses(args: argparse.Namespace) -> List[PaneStatus]:
+def collect_statuses(
+    args: argparse.Namespace, *, include_conversations: bool
+) -> List[PaneStatus]:
     panes = collect_panes()
     processes = collect_processes() if panes else {}
     return build_statuses(
@@ -1089,7 +1102,9 @@ def collect_statuses(args: argparse.Namespace) -> List[PaneStatus]:
         load_marks(),
         args.cpu_threshold,
         args.memory_threshold,
-        conversation_collector=collect_agent_conversations,
+        conversation_collector=(
+            collect_agent_conversations if include_conversations else None
+        ),
     )
 
 
@@ -1297,7 +1312,7 @@ def save_report(text: str, output: str) -> None:
 
 
 def cmd_report(args: argparse.Namespace) -> int:
-    statuses = collect_statuses(args)
+    statuses = collect_statuses(args, include_conversations=True)
     payload = status_payload(statuses, args, report_type=args.report_type)
     if args.format == "json":
         text = json.dumps(payload, ensure_ascii=False, indent=2)
@@ -1310,7 +1325,7 @@ def cmd_report(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
-    statuses = collect_statuses(args)
+    statuses = collect_statuses(args, include_conversations=args.json)
     if args.json:
         print(json.dumps(status_payload(statuses, args), ensure_ascii=False, indent=2))
     else:
@@ -1322,7 +1337,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
     first = True
     try:
         while True:
-            statuses = collect_statuses(args)
+            statuses = collect_statuses(args, include_conversations=False)
             if not first:
                 sys.stdout.write("\033[H\033[2J")
             first = False

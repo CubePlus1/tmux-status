@@ -2,9 +2,10 @@ import importlib.util
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "tmux_status.py"
 SPEC = importlib.util.spec_from_file_location("tmux_status", MODULE_PATH)
@@ -469,6 +470,42 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual(
             "tmux_scrollback_resume_command", conversations[0].identity_source
         )
+
+    def test_multiple_processes_remain_unknown_despite_one_scrollback_uuid(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane()
+        processes = [
+            tmux_status.ProcessInfo(
+                pid, 100, 0.0, 1, "S", "0:01", "/usr/local/bin/codex"
+            )
+            for pid in (101, 102)
+        ]
+        conversations = tmux_status.collect_agent_conversations(
+            pane,
+            processes,
+            open_paths=lambda _pid: [],
+            scrollback=lambda _pane_id: "codex resume {}\n".format(codex_id),
+        )
+
+        self.assertEqual(1, len(conversations))
+        self.assertEqual("unknown", conversations[0].conversation_id_status)
+        self.assertEqual([101, 102], conversations[0].process_pids)
+        self.assertIsNone(conversations[0].conversation_id)
+
+    def test_human_status_and_watch_skip_conversation_collection(self):
+        status_args = tmux_status.build_parser().parse_args(["status"])
+        with patch.object(tmux_status, "collect_statuses", return_value=[]) as collect:
+            with patch.object(tmux_status, "render_table", return_value="table"):
+                with redirect_stdout(StringIO()):
+                    tmux_status.cmd_status(status_args)
+        collect.assert_called_once_with(status_args, include_conversations=False)
+
+        watch_args = tmux_status.build_parser().parse_args(["watch"])
+        with patch.object(
+            tmux_status, "collect_statuses", side_effect=KeyboardInterrupt
+        ) as collect:
+            self.assertEqual(0, tmux_status.cmd_watch(watch_args))
+        collect.assert_called_once_with(watch_args, include_conversations=False)
 
     def test_payload_and_markdown_include_explicit_mapping_and_recovery(self):
         codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
