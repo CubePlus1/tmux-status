@@ -305,6 +305,7 @@ class TmuxStatusTests(unittest.TestCase):
             "--config=/tmp/bunfig.toml",
             "--preload",
             "/tmp/register.ts",
+            "run",
             "/opt/codex",
             "resume",
             codex_id,

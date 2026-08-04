@@ -470,11 +470,16 @@ def executable_names_from_tokens(tokens: Sequence[str]) -> List[str]:
     runtime_name = os.path.basename(tokens[index]).lower().lstrip("-")
     if runtime_name in RUNTIME_NAMES or re.fullmatch(r"python\d+\.\d+", runtime_name):
         index += 1
+        bun_run_consumed = False
         while index < len(tokens):
             token = tokens[index]
             next_index = runtime_option_next_index(runtime_name, tokens, index)
             if next_index is not None:
                 index = next_index
+                continue
+            if runtime_name == "bun" and token == "run" and not bun_run_consumed:
+                bun_run_consumed = True
+                index += 1
                 continue
             if token == "-m" and index + 1 < len(tokens):
                 candidates.append(tokens[index + 1])
@@ -672,11 +677,16 @@ def tool_arguments_from_tokens(
     runtime_name = os.path.basename(tokens[index]).lower().lstrip("-")
     if is_runtime_name(runtime_name):
         index += 1
+        bun_run_consumed = False
         while index < len(tokens):
             token = tokens[index]
             next_index = runtime_option_next_index(runtime_name, tokens, index)
             if next_index is not None:
                 index = next_index
+                continue
+            if runtime_name == "bun" and token == "run" and not bun_run_consumed:
+                bun_run_consumed = True
+                index += 1
                 continue
             if token == "-m" and index + 1 < len(tokens):
                 executable_index = index + 1
