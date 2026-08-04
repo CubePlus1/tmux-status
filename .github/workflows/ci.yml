@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out tmux-status
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out pinned OpenAI validators
+        uses: actions/checkout@v5
+        with:
+          repository: openai/skills
+          ref: 49f948faa9258a0c61caceaf225e179651397431
+          path: .ci/openai-skills
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Validate canonical v3 contract
+        working-directory: contracts/v3
+        run: |
+          shasum -a 256 -c SHA256SUMS
+          uvx --from check-jsonschema==0.33.3 check-jsonschema \
+            --schemafile tmux-status.schema.json fixtures/*.json
+          python3 validate_semantics.py fixtures/*.json
+          if jq '.generated_at = "2026-08-03T12:00:00+16:00"' \
+            fixtures/confirmed.json | uvx --from check-jsonschema==0.33.3 \
+            check-jsonschema --schemafile tmux-status.schema.json -; then
+            echo "unsupported PostgreSQL timezone offset unexpectedly passed" >&2
+            exit 1
+          fi
+          if jq '.pane_count = 0' fixtures/confirmed.json | \
+            python3 validate_semantics.py -; then
+            echo "contradictory summary counts unexpectedly passed" >&2
+            exit 1
+          fi
+          for mutation in \
+            '.producer.version = "0.3.1"' \
+            '.panes[0].pane_id = "%99"' \
+            '.panes[0].pane_instance_id = "wrong"' \
+            '.panes[0].target = "other:9.9" | .panes[0].tmux_target = "other:9.9" | .recovery[0].tmux_target = "other:9.9"' \
+            '.panes[0].session_created = 9007199254740992' \
+            '.panes[0].tmux_window_index = 9007199254740992 | .panes[0].window = "9007199254740992:code" | .panes[0].target = "work:9007199254740992.0" | .panes[0].tmux_target = "work:9007199254740992.0" | .recovery[0].tmux_target = "work:9007199254740992.0"' \
+            '.panes[0].agent_conversations[0].process_instances = {"2147483648":"2147483648:oversized"} | .recovery[0].process_instances = {"2147483648":"2147483648:oversized"}' \
+            '.panes[0].agent_conversations[0].process_instances = {"101":"202:wrong-process"}' \
+            '.panes[0].agent_conversations[0].process_instances = {"101":"101:"}' \
+            '.panes[0].agent_conversations += [.panes[0].agent_conversations[0] | .process_instances = {"101":"101:different"}] | .recovery += [.recovery[0] | .process_instances = {"101":"101:different"}] | .confirmed_conversation_count = 2' \
+            '.panes[0].agent_conversations += [.panes[0].agent_conversations[0]] | .recovery += [.recovery[0]] | .confirmed_conversation_count = 2' \
+            '.panes[0].agent_conversations += [.panes[0].agent_conversations[0] | .process_instances = {"102":"102:second"}] | .recovery += [.recovery[0] | .process_instances = {"102":"102:second"}] | .confirmed_conversation_count = 2' \
+            '.panes[0].agent_conversations += [(.panes[0].agent_conversations[0] | .conversation_id |= ascii_upcase | .stable_mapping_key = ("codex:" + .conversation_id) | .resume_command = ("codex resume -C /tmp/project " + .conversation_id) | .process_instances = {"102":"102:upper"})] | .recovery += [(.recovery[0] | .conversation_id |= ascii_upcase | .stable_mapping_key = ("codex:" + .conversation_id) | .resume_command = ("codex resume -C /tmp/project " + .conversation_id) | .process_instances = {"102":"102:upper"})] | .confirmed_conversation_count = 2' \
+            '.panes += [.panes[0] | .agent_conversations = []] | .pane_count = 2' \
+            '.panes[0].dead = true' \
+            '.panes[0].process_count = 0' \
+            '.panes[0].tools = []' \
+            '.panes[0].cpu_percent = 100' \
+            '.panes[0].memory_mb = 2048' \
+            '.panes[0].cpu_percent = 0 | .panes[0].anomalies = ["CPU"] | .anomaly_count = 1' \
+            '.thresholds.cpu_percent = 0 | .panes[0].cpu_percent = 0' \
+            '.panes[0].dead = true | .panes[0].agent_conversations = [] | .recovery = [] | .confirmed_conversation_count = 0' \
+            '.panes[0].agent_conversations[0].working_directory = ""' \
+            '.panes[0].agent_conversations[0].working_directory = "project" | .panes[0].agent_conversations[0].resume_command = ("codex resume -C project " + .panes[0].agent_conversations[0].conversation_id) | .recovery[0].working_directory = "project" | .recovery[0].resume_command = ("codex resume -C project " + .recovery[0].conversation_id)' \
+            '.panes[0].agent_conversations[0].source_path = null | .recovery[0].source_path = null' \
+            '.panes[0].agent_conversations[0].source_path = "sessions/rollout.jsonl" | .recovery[0].source_path = "sessions/rollout.jsonl"' \
+            '.panes[0].agent_conversations[0].identity_source = "cli_resume_argument" | .recovery[0].identity_source = "cli_resume_argument"' \
+            '.panes[0].agent_conversations[0].identity_source = "cli_session_id_argument" | .panes[0].agent_conversations[0].source_path = null | .recovery[0].identity_source = "cli_session_id_argument" | .recovery[0].source_path = null' \
+            '.panes[0].agent_conversations[0].source_path = "session\u0000path" | .recovery[0].source_path = "session\u0000path"'; do
+            if jq "$mutation" fixtures/confirmed.json | \
+              python3 validate_semantics.py -; then
+              echo "contradictory v3 identity unexpectedly passed: $mutation" >&2
+              exit 1
+            fi
+          done
+          for fixture in fixtures-invalid/*.json; do
+            if uvx --from check-jsonschema==0.33.3 check-jsonschema \
+              --schemafile tmux-status.schema.json "$fixture"; then
+              echo "$fixture unexpectedly passed validation" >&2
+              exit 1
+            fi
+          done
+          if python3 -c 'import json, sys; payload = json.load(open("fixtures/confirmed.json", encoding="utf-8")); payload["panes"][0]["agent_conversations"][0]["process_instances"]["101"] = "101:\ud800"; payload["recovery"][0]["process_instances"]["101"] = "101:\ud800"; json.dump(payload, sys.stdout)' | \
+            python3 validate_semantics.py -; then
+            echo "unpaired Unicode surrogate unexpectedly passed" >&2
+            exit 1
+          fi
+
+      - name: Validate Skill
+        run: |
+          uv run --with pyyaml==6.0.2 python \
+            .ci/openai-skills/skills/.system/skill-creator/scripts/quick_validate.py \
+            skills/tmux-status
+
+      - name: Smoke-test live output shape
+        run: |
+          python3 skills/tmux-status/scripts/tmux_status.py --version
+          python3 -m py_compile skills/tmux-status/scripts/tmux_status.py

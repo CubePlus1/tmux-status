@@ -1,0 +1,43 @@
+{
+  "schema_version": 3,
+  "tool_version": "0.3.0",
+  "producer": { "name": "tmux-status", "version": "0.3.0" },
+  "server_instance_id": "500:1784999999",
+  "report_type": "status",
+  "pre_restart": false,
+  "generated_at": "2026-08-03T12:00:00Z",
+  "host": "local-host",
+  "thresholds": { "cpu_percent": 80, "memory_mb": 1024 },
+  "pane_count": 1,
+  "anomaly_count": 0,
+  "confirmed_conversation_count": 0,
+  "unknown_conversation_count": 1,
+  "recovery": [{
+    "tool": "codex", "conversation_id": null, "conversation_id_status": "unknown",
+    "conversation_id_kind": "codex_thread_id", "identity_source": "conflicting_evidence",
+    "source_path": null, "stable_mapping_key": null, "tmux_target": "work:0.0",
+    "tmux_session_name": "work", "pane_id": "%3", "pane_pid": 100,
+    "process_instances": {"101": "101:Mon Aug 3 12:00:00 2026"},
+    "working_directory": "/tmp/project", "resume_command": null
+  }],
+  "panes": [{
+    "session": "work", "window": "0:code", "pane": "%3", "target": "work:0.0",
+    "pid": 100, "command": "codex", "path": "/tmp/project", "attached": true,
+    "selected": true, "dead": false, "cpu_percent": 0, "memory_mb": 64,
+    "process_count": 2, "tools": ["codex"], "activity": "active",
+    "activity_source": "auto", "note": "", "anomalies": [], "session_id": "$1",
+    "session_created": 1785000000, "window_id": "@2",
+    "server_instance_id": "500:1784999999",
+    "pane_instance_id": "500:1784999999:$1:1785000000:@2:%3:100",
+    "tmux_target": "work:0.0", "tmux_session_name": "work", "tmux_window_index": 0,
+    "tmux_window_name": "code", "tmux_pane_index": 0, "pane_id": "%3", "pane_pid": 100,
+    "working_directory": "/tmp/project", "agent_conversations": [{
+      "tool": "codex", "conversation_id": null, "conversation_id_status": "unknown",
+      "conversation_id_kind": "codex_thread_id", "identity_source": "conflicting_evidence",
+      "source_path": null, "working_directory": "/tmp/project",
+      "process_instances": {"101": "101:Mon Aug 3 12:00:00 2026"},
+      "stable_mapping_key": null,
+      "resume_command": null, "evidence": "multiple distinct resume UUIDs found"
+    }]
+  }]
+}

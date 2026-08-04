@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+"""Validate v3 relationships that JSON Schema cannot express."""
+
+import json
+import shlex
+import sys
+from pathlib import Path
+
+
+RECOVERY_FIELDS = (
+    "tool",
+    "conversation_id",
+    "conversation_id_status",
+    "conversation_id_kind",
+    "identity_source",
+    "source_path",
+    "stable_mapping_key",
+    "process_instances",
+    "working_directory",
+    "resume_command",
+)
+MAX_PROCESS_PID = 2147483647
+MAX_SAFE_INTEGER = 9007199254740991
+
+
+def expected_resume(tool, conversation_id, cwd):
+    if tool == "codex":
+        return "codex resume -C {} {}".format(shlex.quote(cwd), conversation_id)
+    return "grok --cwd {} --resume {}".format(shlex.quote(cwd), conversation_id)
+
+
+def rounded_threshold_expectation(reported_value, threshold):
+    if threshold == 0:
+        return True
+    rounding_radius = 0.05
+    if reported_value - rounding_radius >= threshold:
+        return True
+    if reported_value + rounding_radius < threshold:
+        return False
+    return None
+
+
+def has_unsupported_text(value):
+    index = 0
+    while index < len(value):
+        code_point = ord(value[index])
+        if code_point == 0:
+            return True
+        if 0xD800 <= code_point <= 0xDBFF:
+            index += 1
+            if index >= len(value) or not 0xDC00 <= ord(value[index]) <= 0xDFFF:
+                return True
+        elif 0xDC00 <= code_point <= 0xDFFF:
+            return True
+        index += 1
+    return False
+
+
+def contains_unsupported_text(value):
+    if isinstance(value, str):
+        return has_unsupported_text(value)
+    if isinstance(value, list):
+        return any(contains_unsupported_text(item) for item in value)
+    if isinstance(value, dict):
+        return any(
+            has_unsupported_text(key) or contains_unsupported_text(item)
+            for key, item in value.items()
+        )
+    return False
+
+
+def validate(payload):
+    errors = []
+    if contains_unsupported_text(payload):
+        errors.append("string fields cannot contain NUL or unpaired surrogates")
+    seen_process_instances = set()
+    process_instance_by_pid = {}
+    seen_pane_ids = set()
+    seen_pane_instance_ids = set()
+    panes = payload.get("panes", [])
+    recovery = payload.get("recovery", [])
+    thresholds = payload.get("thresholds", {})
+    producer = payload.get("producer", {})
+    if producer.get("version") != payload.get("tool_version"):
+        errors.append("producer.version does not match tool_version")
+    if payload.get("pane_count") != len(panes):
+        errors.append("pane_count does not equal len(panes)")
+    anomaly_count = sum(bool(pane.get("anomalies")) for pane in panes)
+    if payload.get("anomaly_count") != anomaly_count:
+        errors.append("anomaly_count does not equal anomalous pane count")
+    confirmed_count = sum(
+        entry.get("conversation_id_status") == "confirmed" for entry in recovery
+    )
+    unknown_count = sum(
+        entry.get("conversation_id_status") == "unknown" for entry in recovery
+    )
+    if payload.get("confirmed_conversation_count") != confirmed_count:
+        errors.append("confirmed_conversation_count does not match recovery")
+    if payload.get("unknown_conversation_count") != unknown_count:
+        errors.append("unknown_conversation_count does not match recovery")
+
+    server_id = payload.get("server_instance_id")
+    if panes and any(pane.get("server_instance_id") != server_id for pane in panes):
+        errors.append("pane server_instance_id does not match producer")
+
+    projected = []
+    for pane in panes:
+        anomaly_labels = set(pane.get("anomalies", []))
+        if ("DEAD" in anomaly_labels) != bool(pane.get("dead")):
+            errors.append("DEAD anomaly does not match pane state")
+        for label, metric, threshold in (
+            ("CPU", pane.get("cpu_percent", 0), thresholds.get("cpu_percent", 0)),
+            ("MEM", pane.get("memory_mb", 0), thresholds.get("memory_mb", 0)),
+        ):
+            expectation = rounded_threshold_expectation(metric, threshold)
+            if expectation is not None and (label in anomaly_labels) != expectation:
+                errors.append("{} anomaly does not match rounded threshold".format(label))
+        for index_field in ("tmux_window_index", "tmux_pane_index"):
+            if pane.get(index_field, 0) > MAX_SAFE_INTEGER:
+                errors.append("{} exceeds safe integer range".format(index_field))
+        pane_id = pane.get("pane_id")
+        pane_instance = pane.get("pane_instance_id")
+        if pane_id in seen_pane_ids:
+            errors.append("pane_id is reused within the report")
+        seen_pane_ids.add(pane_id)
+        if pane_instance in seen_pane_instance_ids:
+            errors.append("pane_instance_id is reused within the report")
+        seen_pane_instance_ids.add(pane_instance)
+        if pane.get("session_created", 0) > MAX_SAFE_INTEGER:
+            errors.append("session_created exceeds safe database integer range")
+        legacy_aliases = (
+            ("session", pane.get("tmux_session_name")),
+            (
+                "window",
+                "{}:{}".format(
+                    pane.get("tmux_window_index"), pane.get("tmux_window_name")
+                ),
+            ),
+            ("pane", pane.get("pane_id")),
+            ("target", pane.get("tmux_target")),
+            ("pid", pane.get("pane_pid")),
+            ("path", pane.get("working_directory")),
+        )
+        for legacy_field, v3_value in legacy_aliases:
+            if pane.get(legacy_field) != v3_value:
+                errors.append(
+                    "{} does not match its v3 pane identity field".format(
+                        legacy_field
+                    )
+                )
+        expected_target = "{}:{}.{}".format(
+            pane.get("tmux_session_name"),
+            pane.get("tmux_window_index"),
+            pane.get("tmux_pane_index"),
+        )
+        if pane.get("tmux_target") != expected_target:
+            errors.append("tmux_target does not match pane coordinates")
+        expected_pane_instance_id = "{}:{}:{}:{}:{}:{}".format(
+            pane.get("server_instance_id"),
+            pane.get("session_id"),
+            pane.get("session_created"),
+            pane.get("window_id"),
+            pane.get("pane_id"),
+            pane.get("pane_pid"),
+        )
+        if pane.get("pane_instance_id") != expected_pane_instance_id:
+            errors.append("pane_instance_id does not match pane identity fields")
+        conversations = pane.get("agent_conversations", [])
+        seen_confirmed_mappings = set()
+        mapped_process_pids = set()
+        conversation_tools = set()
+        if pane.get("dead") and conversations:
+            errors.append("dead pane cannot contain agent conversations")
+        for conversation in conversations:
+            conversation_tools.add(conversation.get("tool"))
+            identity_source = conversation.get("identity_source")
+            source_path = conversation.get("source_path")
+            if identity_source == "open_session_file":
+                if (
+                    not isinstance(source_path, str)
+                    or not source_path
+                    or not Path(source_path).is_absolute()
+                ):
+                    errors.append(
+                        "open_session_file identity requires an absolute source_path"
+                    )
+            elif source_path is not None:
+                errors.append("non-file identity requires a null source_path")
+            if (
+                conversation.get("conversation_id_status") == "confirmed"
+                and conversation.get("tool") == "codex"
+                and identity_source == "cli_session_id_argument"
+            ):
+                errors.append(
+                    "Codex identity cannot use cli_session_id_argument evidence"
+                )
+            for pid, instance_key in conversation.get(
+                "process_instances", {}
+            ).items():
+                mapped_process_pids.add(pid)
+                if int(pid) > MAX_PROCESS_PID:
+                    errors.append(
+                        "process_instances PID exceeds signed 32-bit range"
+                    )
+                if not instance_key.startswith(pid + ":") or len(instance_key) == len(pid) + 1:
+                    errors.append("process instance key does not match its PID")
+                previous_instance_key = process_instance_by_pid.get(pid)
+                if (
+                    previous_instance_key is not None
+                    and previous_instance_key != instance_key
+                ):
+                    errors.append("PID maps to multiple process instance keys")
+                process_instance_by_pid[pid] = instance_key
+                process_instance = (pid, instance_key)
+                if process_instance in seen_process_instances:
+                    errors.append("process instance is reused across conversations")
+                seen_process_instances.add(process_instance)
+            entry = {field: conversation[field] for field in RECOVERY_FIELDS}
+            entry.update(
+                tmux_target=pane["tmux_target"],
+                tmux_session_name=pane["tmux_session_name"],
+                pane_id=pane["pane_id"],
+                pane_pid=pane["pane_pid"],
+            )
+            projected.append(entry)
+            status = conversation.get("conversation_id_status")
+            if status == "confirmed":
+                tool = conversation.get("tool")
+                conversation_id = conversation.get("conversation_id")
+                confirmed_mapping = (
+                    tool,
+                    conversation_id.lower()
+                    if isinstance(conversation_id, str)
+                    else conversation_id,
+                )
+                if confirmed_mapping in seen_confirmed_mappings:
+                    errors.append(
+                        "confirmed conversation mapping is duplicated within a pane"
+                    )
+                seen_confirmed_mappings.add(confirmed_mapping)
+                cwd = conversation.get("working_directory")
+                if conversation.get("stable_mapping_key") != "{}:{}".format(
+                    tool, conversation_id
+                ):
+                    errors.append("stable_mapping_key does not match tool and ID")
+                if not isinstance(cwd, str) or not cwd:
+                    errors.append("confirmed working_directory must be nonempty")
+                elif not Path(cwd).is_absolute():
+                    errors.append("confirmed working_directory must be absolute")
+                elif conversation.get("resume_command") != expected_resume(
+                    tool, conversation_id, cwd
+                ):
+                    errors.append("resume_command does not match tool, ID, and cwd")
+        if pane.get("process_count", 0) < len(mapped_process_pids):
+            errors.append("process_count does not cover conversation process PIDs")
+        if not conversation_tools.issubset(set(pane.get("tools", []))):
+            errors.append("tools does not cover conversation tools")
+    if recovery != projected:
+        errors.append("recovery is not the ordered pane conversation projection")
+    return errors
+
+
+def load_payload(path):
+    if path == "-":
+        return json.load(sys.stdin)
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def main(arguments):
+    failed = False
+    for path in arguments:
+        errors = validate(load_payload(path))
+        if errors:
+            failed = True
+            for error in errors:
+                print("{}: {}".format(path, error), file=sys.stderr)
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
