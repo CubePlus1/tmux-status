@@ -396,6 +396,16 @@ def collect_processes() -> Dict[int, ProcessInfo]:
     return parse_ps_output(result.stdout)
 
 
+def process_command(process: ProcessInfo) -> Optional[str]:
+    result = run_command(
+        ["ps", "-p", str(process.pid), "-o", "command="]
+    )
+    if result.returncode != 0:
+        return None
+    command = result.stdout.strip()
+    return command or None
+
+
 def descendants(root_pid: int, processes: Dict[int, ProcessInfo]) -> List[ProcessInfo]:
     children: Dict[int, List[int]] = {}
     for process in processes.values():
@@ -1481,8 +1491,12 @@ def collect_agent_conversations(
     instance_key: Optional[Callable[[int], str]] = None,
     session_roots: Optional[Dict[str, Path]] = None,
     environment: Callable[[int], Dict[str, str]] = process_agent_home_environment,
+    current_command: Optional[
+        Callable[[ProcessInfo], Optional[str]]
+    ] = None,
 ) -> List[AgentConversation]:
     instance_key = instance_key or process_instance_key
+    current_command = current_command or process_command
     tool_processes: Dict[str, List[ProcessInfo]] = {}
     observed_arguments: Dict[int, Optional[List[str]]] = {}
     for process in tree:
@@ -1568,6 +1582,9 @@ def collect_agent_conversations(
                     file_evidence[session_id] = (str(source_path), metadata_cwd)
             ending_arguments = arguments(process.pid)
             ending_instance_key = instance_key(process.pid)
+            ending_fallback_command = (
+                current_command(process) if ending_arguments is None else None
+            )
             ending_observed_cwd = working_directory(process.pid)
             normalized_ending_cwd = (
                 os.path.normpath(ending_observed_cwd)
@@ -1575,8 +1592,9 @@ def collect_agent_conversations(
                 else None
             )
             process_still_matches_tool = (
-                ending_arguments is None
-                or tool_arguments_from_tokens(tool, ending_arguments) is not None
+                ending_fallback_command == process.command
+                if ending_arguments is None
+                else tool_arguments_from_tokens(tool, ending_arguments) is not None
             )
             if (
                 ending_instance_key != process_keys[process.pid]

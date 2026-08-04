@@ -25,6 +25,13 @@ class TmuxStatusTests(unittest.TestCase):
         )
         self.instance_key_patch.start()
         self.addCleanup(self.instance_key_patch.stop)
+        self.process_command_patch = patch.object(
+            tmux_status,
+            "process_command",
+            side_effect=lambda process: process.command,
+        )
+        self.process_command_patch.start()
+        self.addCleanup(self.process_command_patch.stop)
 
     @staticmethod
     def pane(path="/tmp/project"):
@@ -1661,6 +1668,35 @@ class TmuxStatusTests(unittest.TestCase):
         self.assertEqual("unavailable", conversations[0].identity_source)
         self.assertIsNone(conversations[0].resume_command)
         self.assertIn("working directory", conversations[0].evidence)
+
+    def test_fallback_command_change_discards_collected_evidence(self):
+        codex_id = "019fc5d1-40e4-75a2-89f2-188ae5efb2c4"
+        pane = self.pane()
+        process = tmux_status.ProcessInfo(
+            101,
+            100,
+            0.0,
+            1,
+            "S",
+            "0:01",
+            "codex resume {}".format(codex_id),
+        )
+        conversations = tmux_status.collect_agent_conversations(
+            pane,
+            [process],
+            open_paths=lambda _pid: [],
+            scrollback=lambda _pane_id: "",
+            working_directory=lambda _pid: "/project",
+            arguments=lambda _pid: None,
+            instance_key=lambda _pid: "101:same-start",
+            current_command=lambda _process: "sleep 600",
+        )
+
+        self.assertEqual(1, len(conversations))
+        self.assertEqual("unknown", conversations[0].conversation_id_status)
+        self.assertEqual("unavailable", conversations[0].identity_source)
+        self.assertIsNone(conversations[0].resume_command)
+        self.assertIn("changed incarnation", conversations[0].evidence)
 
     def test_conflicting_open_session_files_are_unknown(self):
         pane = self.pane()
