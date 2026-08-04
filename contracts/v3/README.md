@@ -11,6 +11,7 @@ Rules:
 - A confirmed conversation requires process-associated file or CLI evidence, a UUID, nonempty `working_directory`, `stable_mapping_key` derived exactly as `<tool>:<conversation_id>`, and `resume_command`.
 - `pre_restart` is true exactly for `report_type: "recovery"` and false for status or snapshot reports.
 - Indexed tmux identity components use bounded numeric forms. `generated_at` excludes RFC 3339 leap-second `:60` values, limits offsets to PostgreSQL's ±15:59 range, and permits at most six fractional digits so snapshot ordering is preserved exactly.
+- Persisted resource values are finite and bounded: aggregate CPU is at most `1,000,000%`, and memory is at most `1,000,000,000 MB`; the same limits apply to reporting thresholds.
 - `DEAD` matches pane state exactly. `CPU` and `MEM` match their thresholds whenever the producer's one-decimal rounding makes the result unambiguous; boundary values within half a rounding unit may validly carry either label state.
 - Every conversation records its own `working_directory`; pane cwd is never substituted for a different agent cwd, and missing process-associated cwd keeps recovery unknown.
 - Dead panes never contain agent conversations or recovery commands.

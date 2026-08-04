@@ -28,6 +28,8 @@ FIELD_SEPARATOR = "\x1f"
 TMUX_ESCAPED_FIELD_SEPARATOR = r"\037"
 DEFAULT_CPU_THRESHOLD = 80.0
 DEFAULT_MEMORY_THRESHOLD_MB = 1024.0
+MAX_CPU_PERCENT = 1_000_000.0
+MAX_MEMORY_MB = 1_000_000_000.0
 SHELL_NAMES = {
     "bash",
     "dash",
@@ -2588,6 +2590,24 @@ def nonnegative_float(value: str) -> float:
     return number
 
 
+def cpu_percent(value: str) -> float:
+    number = nonnegative_float(value)
+    if number > MAX_CPU_PERCENT:
+        raise argparse.ArgumentTypeError(
+            "must be at most {}".format(int(MAX_CPU_PERCENT))
+        )
+    return number
+
+
+def memory_mb(value: str) -> float:
+    number = nonnegative_float(value)
+    if number > MAX_MEMORY_MB:
+        raise argparse.ArgumentTypeError(
+            "must be at most {}".format(int(MAX_MEMORY_MB))
+        )
+    return number
+
+
 def positive_float(value: str) -> float:
     number = finite_float(value)
     if number <= 0:
@@ -2598,14 +2618,14 @@ def positive_float(value: str) -> float:
 def add_threshold_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--cpu-threshold",
-        type=nonnegative_float,
+        type=cpu_percent,
         default=DEFAULT_CPU_THRESHOLD,
         metavar="PERCENT",
         help="flag a pane at or above this aggregate CPU%% (default: %(default)s)",
     )
     parser.add_argument(
         "--memory-threshold",
-        type=nonnegative_float,
+        type=memory_mb,
         default=DEFAULT_MEMORY_THRESHOLD_MB,
         metavar="MB",
         help="flag a pane at or above this aggregate memory (default: %(default)s)",

@@ -49,8 +49,8 @@
       "additionalProperties": false,
       "required": ["cpu_percent", "memory_mb"],
       "properties": {
-        "cpu_percent": { "type": "number", "minimum": 0 },
-        "memory_mb": { "type": "number", "minimum": 0 }
+        "cpu_percent": { "$ref": "#/$defs/cpuPercent" },
+        "memory_mb": { "$ref": "#/$defs/memoryMb" }
       }
     },
     "pane_count": { "type": "integer", "minimum": 0 },
@@ -93,6 +93,16 @@
     }
   ],
   "$defs": {
+    "cpuPercent": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1000000
+    },
+    "memoryMb": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1000000000
+    },
     "version": {
       "type": "string",
       "pattern": "^0\\.3\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"
@@ -272,8 +282,8 @@
         "attached": { "type": "boolean" },
         "selected": { "type": "boolean" },
         "dead": { "type": "boolean" },
-        "cpu_percent": { "type": "number", "minimum": 0 },
-        "memory_mb": { "type": "number", "minimum": 0 },
+        "cpu_percent": { "$ref": "#/$defs/cpuPercent" },
+        "memory_mb": { "$ref": "#/$defs/memoryMb" },
         "process_count": { "type": "integer", "minimum": 0 },
         "tools": {
           "type": "array",

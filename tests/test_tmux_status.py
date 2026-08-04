@@ -215,6 +215,8 @@ class TmuxStatusTests(unittest.TestCase):
             ["status", "--cpu-threshold", "nan"],
             ["status", "--memory-threshold", "inf"],
             ["status", "--cpu-threshold", "-1"],
+            ["status", "--cpu-threshold", "1000001"],
+            ["status", "--memory-threshold", "1000000001"],
             ["watch", "--interval", "nan"],
             ["watch", "--interval", "0"],
         ]
